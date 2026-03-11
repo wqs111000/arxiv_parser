@@ -37,7 +37,7 @@
 
 1. **克隆项目**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/wqs111000/arxiv_parser.git
    cd arxiv_parser
    ```
 
@@ -105,42 +105,6 @@
    docker compose up -d --build   # 后台重启并重建镜像和容器
    docker compose build           # 仅构建镜像，不启动
    ```
-
-#### 备用方式：使用 venv
-
-```bash
-# 1. 克隆项目
-git clone <repository-url>
-cd arxiv_parser
-
-# 2. 创建虚拟环境
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# 或
-venv\Scripts\activate     # Windows
-
-# 3. 安装依赖
-pip install -r requirements.txt
-
-# 4. 配置API密钥
-cp .env.example .env
-# 编辑 .env 文件
-
-# 5. 启动应用
-python app.py
-```
-
-#### 快速启动（一键脚本）
-
-```bash
-# 使用 Conda（需要先安装 Conda）
-chmod +x setup_conda.sh
-./setup_conda.sh
-
-# 或使用自带脚本
-chmod +x start.sh
-./start.sh
-```
 
 ### 访问应用
 
@@ -306,19 +270,6 @@ arxiv_parser/
 3. **存储空间**：PDF文件会占用本地存储空间
 4. **隐私保护**：论文数据和API密钥本地存储，不会上传到服务器
 
-## 🐛 常见问题
-
-### Q: 无法下载论文？
-A: 检查网络连接是否能访问arXiv.org
-
-### Q: AI总结生成失败？
-A: 检查API密钥是否正确，余额是否充足
-
-### Q: 如何更换模型？
-A: 在界面下拉菜单选择，或修改代码中的默认模型
-
-### Q: 数据存储在哪里？
-A: SQLite数据库`arxiv_history.db`和PDF文件`downloads/`目录
 
 ## 🚀 高级功能
 
