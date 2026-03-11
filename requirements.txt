@@ -1,0 +1,6 @@
+Flask
+arxiv
+openai
+requests
+Werkzeug
+python-dotenv

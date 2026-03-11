@@ -1,0 +1,14 @@
+name: arxiv_parser
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pip
+  - pip:
+    - Flask
+    - arxiv
+    - openai
+    - requests
+    - Werkzeug
+    - python-dotenv
