@@ -14,7 +14,9 @@
 - 🎨 **现代化界面**：简洁美观的用户界面
 - ⚡ **异步处理**：AI总结异步生成，不阻塞用户界面
 
+体验网址：http://arxiv-parser.iepose.cn/
 <img src="assets/demo.png" width="80%" alt="网页效果图">
+
 
 ## 🛠️ 技术栈
 

@@ -13,6 +13,6 @@ services:
       - FLASK_PORT=5000
       - TZ=Asia/Shanghai
     volumes:
-      - ./data:/app/data
+      - .:/app
+      #- ./data:/app/data
     restart: unless-stopped
-
