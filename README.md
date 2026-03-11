@@ -232,7 +232,7 @@ arxiv_parser/
 ### 版本记录显示
 - 自动从arXiv数据中提取版本信息
 - 显示论文提交时间和最后修订时间
-- 格式示例：`Submitted on 12 Jun 2017, last revised 2 Aug 2023`
+- 格式示例：`Published 12 Jun 2017, revised 2 Aug 2023`
 - 帮助了解论文的更新历史和时效性
 
 ### 可选AI总结功能
