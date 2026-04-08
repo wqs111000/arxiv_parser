@@ -96,11 +96,40 @@ def clean_filename(title):
     return cleaned
 
 def download_paper(arxiv_id):
-    """下载arXiv论文"""
+    """下载arXiv论文，遇到 429 限速时自动退避重试"""
+    import time as _time
+
+    max_retries = 4
+    retry_delays = [10, 30, 60, 120]  # 每次重试的等待秒数
+
+    for attempt in range(max_retries):
+        try:
+            search = arxiv.Search(id_list=[arxiv_id])
+            paper = next(search.results())
+            break  # 成功则跳出重试循环
+        except arxiv.HTTPError as e:
+            if e.status == 429 and attempt < max_retries - 1:
+                wait = retry_delays[attempt]
+                print(f"arxiv API 限速 (429)，{wait}s 后重试（第 {attempt + 1}/{max_retries - 1} 次）...")
+                _time.sleep(wait)
+                continue
+            print(f"下载论文失败: {e}")
+            import traceback
+            print(f"详细错误: {traceback.format_exc()}")
+            return None
+        except StopIteration:
+            print(f"下载论文失败: 未找到 arxiv_id={arxiv_id}")
+            return None
+        except Exception as e:
+            print(f"下载论文失败: {e}")
+            import traceback
+            print(f"详细错误: {traceback.format_exc()}")
+            return None
+    else:
+        print(f"下载论文失败: 多次重试后仍然 429，arxiv_id={arxiv_id}")
+        return None
+
     try:
-        search = arxiv.Search(id_list=[arxiv_id])
-        paper = next(search.results())
-        
         # 提取发表年份
         published_year = paper.published.year if hasattr(paper, 'published') else 'unknown'
         
@@ -200,6 +229,12 @@ def generate_summary(text, model="gpt-3.5-turbo"):
 
 def generate_full_analysis(pdf_path, model="qwen-long"):
     """使用 qwen-long 对完整 PDF 进行全文分析，返回 markdown 字符串"""
+    import time
+    import traceback as _tb
+
+    # 文件大小限制：qwen-long 支持最大 100MB，但超过 30MB 容易出问题
+    MAX_FILE_SIZE_MB = 50
+
     try:
         api_key = os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("OPENAI_API_KEY")
         base_url = os.environ.get("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
@@ -214,16 +249,56 @@ def generate_full_analysis(pdf_path, model="qwen-long"):
         if not file_path.exists():
             return f"PDF 文件不存在：{pdf_path}"
 
-        # 上传文件
+        # 检查文件大小
+        file_size_mb = file_path.stat().st_size / (1024 * 1024)
+        if file_size_mb > MAX_FILE_SIZE_MB:
+            return f"全文分析失败: PDF 文件过大 ({file_size_mb:.1f}MB)，超过 {MAX_FILE_SIZE_MB}MB 限制，无法处理。"
+
+        # 上传文件 —— 必须显式指定文件名和 MIME 类型，否则 DashScope 无法识别格式
         with open(file_path, "rb") as f:
-            file_object = client.files.create(file=f, purpose="file-extract")
+            file_object = client.files.create(
+                file=(file_path.name, f, "application/pdf"),
+                purpose="file-extract"
+            )
+
+        file_id = file_object.id
+        print(f"文件已上传，file_id={file_id}，大小={file_size_mb:.1f}MB，等待文件处理完成...")
+
+        # 轮询等待文件处理完成（最多等待 300 秒，大文件需要更长时间）
+        max_wait = 300
+        poll_interval = 10
+        waited = 0
+        while waited < max_wait:
+            try:
+                file_info = client.files.retrieve(file_id)
+                file_status = getattr(file_info, 'status', None)
+                print(f"  文件状态: {file_status}（已等待 {waited}s）")
+                if file_status == 'processed':
+                    break
+                elif file_status in ('error', 'deleted', 'failed'):
+                    try:
+                        client.files.delete(file_id)
+                    except Exception:
+                        pass
+                    return f"全文分析失败: 文件处理出错，状态={file_status}。该 PDF 可能有加密、损坏或格式不支持。"
+            except Exception as poll_e:
+                print(f"  轮询文件状态失败: {poll_e}")
+            time.sleep(poll_interval)
+            waited += poll_interval
+        else:
+            # 超时，清理并返回错误
+            try:
+                client.files.delete(file_id)
+            except Exception:
+                pass
+            return f"全文分析失败: 文件处理超时（{max_wait}s），PDF 可能过大或格式异常。"
 
         # 调用 qwen-long 进行全文分析
         completion = client.chat.completions.create(
             model=model,
             messages=[
                 {'role': 'system', 'content': SYSTEM_PROMPT_FULL_ANALYSIS},
-                {'role': 'system', 'content': f'fileid://{file_object.id}'},
+                {'role': 'system', 'content': f'fileid://{file_id}'},
                 {
                     'role': 'user',
                     'content': FULL_ANALYSIS_PROMPT
@@ -238,11 +313,22 @@ def generate_full_analysis(pdf_path, model="qwen-long"):
             if chunk.choices and chunk.choices[0].delta.content:
                 full_content += chunk.choices[0].delta.content
 
+        # 清理：删除已上传的文件（避免占用配额）
+        try:
+            client.files.delete(file_id)
+        except Exception:
+            pass
+
         return full_content if full_content else "全文分析生成失败，返回内容为空"
 
+    except _openai.APIError as e:
+        err_msg = str(e)
+        print(f"全文分析失败 (APIError): {err_msg}\n{_tb.format_exc()}")
+        if "encrypted or corrupted" in err_msg:
+            return "全文分析失败: 该 PDF 文件已加密或内容无法解析。请确认 PDF 可正常打开且未设置内容保护，或尝试重新下载。"
+        return f"全文分析失败: {err_msg}"
     except Exception as e:
-        import traceback
-        print(f"全文分析失败: {e}\n{traceback.format_exc()}")
+        print(f"全文分析失败: {e}\n{_tb.format_exc()}")
         return f"全文分析失败: {str(e)}"
 
 
@@ -597,38 +683,43 @@ def load_analysis_from_md(pdf_path):
 
 def _run_full_analysis(arxiv_id, paper_data, model):
     """在后台执行全文分析并更新数据库（不改变 summary 状态）"""
-    try:
-        analysis = generate_full_analysis(paper_data['pdf_path'], model)
-        conn = sqlite3.connect(app.config['DATABASE'])
-        c = conn.cursor()
-        if analysis and not analysis.startswith("全文分析失败"):
-            # 保存到本地 Markdown 文件
-            save_analysis_to_md(paper_data['pdf_path'], analysis)
-            c.execute(
-                'UPDATE papers SET full_analysis=?, full_analysis_status=? WHERE arxiv_id=?',
-                (analysis, 'completed', arxiv_id)
-            )
-        else:
-            c.execute(
-                'UPDATE papers SET full_analysis=?, full_analysis_status=? WHERE arxiv_id=?',
-                (analysis, 'failed', arxiv_id)
-            )
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        import traceback
-        print(f"全文分析异常: {e}\n{traceback.format_exc()}")
+    def _update_status(status, analysis=None):
+        """辅助函数：更新数据库状态"""
         try:
             conn = sqlite3.connect(app.config['DATABASE'])
             c = conn.cursor()
-            c.execute(
-                'UPDATE papers SET full_analysis_status=? WHERE arxiv_id=?',
-                ('failed', arxiv_id)
-            )
+            if analysis is not None:
+                c.execute(
+                    'UPDATE papers SET full_analysis=?, full_analysis_status=? WHERE arxiv_id=?',
+                    (analysis, status, arxiv_id)
+                )
+            else:
+                c.execute(
+                    'UPDATE papers SET full_analysis_status=? WHERE arxiv_id=?',
+                    (status, arxiv_id)
+                )
             conn.commit()
             conn.close()
-        except Exception:
-            pass
+        except Exception as db_e:
+            print(f"更新数据库状态失败: {db_e}")
+
+    try:
+        analysis = generate_full_analysis(paper_data['pdf_path'], model)
+        
+        # 判断是否成功
+        if analysis and not analysis.startswith("全文分析失败"):
+            # 保存到本地 Markdown 文件
+            save_analysis_to_md(paper_data['pdf_path'], analysis)
+            _update_status('completed', analysis)
+            print(f"全文分析完成: {arxiv_id}")
+        else:
+            _update_status('failed', analysis)
+            print(f"全文分析失败: {arxiv_id} - {analysis}")
+    except Exception as e:
+        import traceback
+        error_msg = f"全文分析异常: {e}"
+        print(f"{error_msg}\n{traceback.format_exc()}")
+        _update_status('failed', error_msg)
 
 
 @app.route('/api/full_analysis/<arxiv_id>', methods=['POST'])
