@@ -95,8 +95,34 @@ def clean_filename(title):
     
     return cleaned
 
-def download_paper(arxiv_id):
-    """下载arXiv论文，遇到 429 限速时自动退避重试"""
+def _verify_pdf_integrity(filepath):
+    """验证 PDF 文件完整性，返回 (是否有效, 错误信息)"""
+    try:
+        with open(filepath, 'rb') as f:
+            header = f.read(8)
+            # PDF 文件必须以 %PDF- 开头
+            if not header.startswith(b'%PDF-'):
+                return False, f"文件头不是 PDF 格式: {header[:8]}"
+            
+            # 检查文件大小
+            f.seek(0, 2)  # 跳到文件末尾
+            file_size = f.tell()
+            if file_size < 1024:  # 小于 1KB 肯定有问题
+                return False, f"文件过小 ({file_size} bytes)，可能下载不完整"
+            
+            # 检查文件尾部是否有 %%EOF
+            f.seek(max(0, file_size - 1024))
+            tail = f.read(1024)
+            if b'%%EOF' not in tail:
+                return False, "PDF 文件尾部缺少 %%EOF 标记，可能下载不完整"
+        
+        return True, None
+    except Exception as e:
+        return False, f"验证 PDF 失败: {e}"
+
+
+def download_paper(arxiv_id, force_redownload=False):
+    """下载arXiv论文，遇到 429 限速时自动退避重试，支持完整性检查和重新下载"""
     import time as _time
 
     max_retries = 4
@@ -156,9 +182,45 @@ def download_paper(arxiv_id):
         
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         
-        # 下载PDF
-        if not os.path.exists(filepath):
+        # 检查是否需要下载
+        need_download = force_redownload or not os.path.exists(filepath)
+        
+        # 如果文件存在，验证完整性
+        if not need_download and os.path.exists(filepath):
+            is_valid, error_msg = _verify_pdf_integrity(filepath)
+            if not is_valid:
+                print(f"PDF 验证失败: {error_msg}，将重新下载: {filename}")
+                need_download = True
+                # 备份损坏的文件
+                try:
+                    backup_path = filepath + '.corrupted'
+                    os.rename(filepath, backup_path)
+                    print(f"已备份损坏文件到: {backup_path}")
+                except Exception:
+                    pass
+        
+        # 下载PDF（如果需要）
+        if need_download:
             paper.download_pdf(dirpath=app.config['UPLOAD_FOLDER'], filename=filename)
+            
+            # 下载后验证完整性
+            is_valid, error_msg = _verify_pdf_integrity(filepath)
+            if not is_valid:
+                print(f"下载后验证失败: {error_msg}")
+                # 尝试重新下载一次
+                print("尝试重新下载...")
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
+                _time.sleep(2)
+                paper.download_pdf(dirpath=app.config['UPLOAD_FOLDER'], filename=filename)
+                
+                # 再次验证
+                is_valid, error_msg = _verify_pdf_integrity(filepath)
+                if not is_valid:
+                    print(f"重新下载后仍验证失败: {error_msg}")
+                    return None
         
         return {
             'title': paper.title,
@@ -926,6 +988,64 @@ def reset_analysis(arxiv_id):
             'reset_type': reset_type
         })
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/redownload/<arxiv_id>', methods=['POST'])
+def redownload_paper(arxiv_id):
+    """重新下载论文 PDF（用于修复损坏的文件）"""
+    try:
+        conn = sqlite3.connect(app.config['DATABASE'])
+        c = conn.cursor()
+        c.execute('SELECT title, authors, abstract, url, pdf_path, version_history FROM papers WHERE arxiv_id = ?',
+                  (arxiv_id,))
+        row = c.fetchone()
+        conn.close()
+
+        if not row:
+            return jsonify({'error': '论文不存在'}), 404
+
+        pdf_path = row[4]
+        
+        # 如果 PDF 存在，先删除
+        if pdf_path and os.path.exists(pdf_path):
+            try:
+                os.remove(pdf_path)
+                print(f"已删除旧 PDF: {pdf_path}")
+            except Exception as e:
+                return jsonify({'error': f'删除旧 PDF 失败: {e}'}), 500
+        
+        # 同时删除关联的 Markdown 文件
+        if pdf_path:
+            md_path = get_md_path_from_pdf(pdf_path)
+            if md_path and os.path.exists(md_path):
+                try:
+                    os.remove(md_path)
+                    print(f"已删除旧 Markdown: {md_path}")
+                except Exception as e:
+                    print(f"删除旧 Markdown 失败: {e}")
+
+        # 重新下载
+        paper_data = download_paper(arxiv_id, force_redownload=True)
+        if not paper_data:
+            return jsonify({'error': '重新下载论文失败'}), 500
+
+        # 更新数据库中的 pdf_path（文件名可能改变）
+        conn = sqlite3.connect(app.config['DATABASE'])
+        c = conn.cursor()
+        c.execute('UPDATE papers SET pdf_path=? WHERE arxiv_id=?',
+                  (paper_data['pdf_path'], arxiv_id))
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            'message': '论文重新下载成功',
+            'arxiv_id': arxiv_id,
+            'pdf_path': paper_data['pdf_path']
+        })
+    except Exception as e:
+        import traceback
+        print(f"重新下载失败: {e}\n{traceback.format_exc()}")
         return jsonify({'error': str(e)}), 500
 
 
