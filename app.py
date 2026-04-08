@@ -207,20 +207,14 @@ def download_paper(arxiv_id, force_redownload=False):
             is_valid, error_msg = _verify_pdf_integrity(filepath)
             if not is_valid:
                 print(f"下载后验证失败: {error_msg}")
-                # 尝试重新下载一次
-                print("尝试重新下载...")
+                # 备份损坏的文件，让用户可以手动处理
                 try:
-                    os.remove(filepath)
+                    backup_path = filepath + '.corrupted'
+                    os.rename(filepath, backup_path)
+                    print(f"已备份损坏文件到: {backup_path}，请使用重新下载或手动上传功能")
                 except Exception:
                     pass
-                _time.sleep(2)
-                paper.download_pdf(dirpath=app.config['UPLOAD_FOLDER'], filename=filename)
-                
-                # 再次验证
-                is_valid, error_msg = _verify_pdf_integrity(filepath)
-                if not is_valid:
-                    print(f"重新下载后仍验证失败: {error_msg}")
-                    return None
+                return None
         
         return {
             'title': paper.title,
@@ -635,15 +629,48 @@ def get_history():
 
 @app.route('/api/download/<arxiv_id>')
 def download_pdf(arxiv_id):
-    """下载PDF文件"""
+    """下载PDF文件，使用规范化的文件名（年份_标题.pdf）"""
     conn = sqlite3.connect(app.config['DATABASE'])
     c = conn.cursor()
-    c.execute('SELECT pdf_path FROM papers WHERE arxiv_id = ?', (arxiv_id,))
+    c.execute('SELECT pdf_path, title, version_history FROM papers WHERE arxiv_id = ?', (arxiv_id,))
     result = c.fetchone()
     conn.close()
     
     if result and result[0] and os.path.exists(result[0]):
-        return send_file(result[0], as_attachment=True)
+        pdf_path = result[0]
+        title = result[1] or arxiv_id
+        
+        # 生成规范化的下载文件名：年份_标题.pdf
+        clean_title = clean_filename(title)
+        # 从 version_history 提取发表年份（格式：Published 01 Jan 2017, revised ...）
+        version_history = result[2] or ''
+        year = 'unknown'
+        year_match = re.search(r'Published\s+\d+\s+\w+\s+(\d{4})', version_history)
+        if year_match:
+            year = year_match.group(1)
+        else:
+            # 如果 version_history 为空，尝试从 arXiv ID 提取年份
+            # arXiv ID 格式如 1706.03762 -> 2017, 1810.04805 -> 2018
+            arxiv_year_match = re.search(r'(\d{2})\d{2}\.\d+', arxiv_id)
+            if arxiv_year_match:
+                year_short = int(arxiv_year_match.group(1))
+                # arXiv 年份：00-24 是 2000-2024，25-99 是 1990-1999
+                if year_short >= 90:
+                    year = str(1900 + year_short)
+                else:
+                    year = str(2000 + year_short)
+        download_filename = f"{year}_{clean_title}.pdf"
+        
+        # 使用 quote 对文件名进行 URL 编码，支持中文
+        from urllib.parse import quote
+        encoded_filename = quote(download_filename)
+        
+        return send_file(
+            pdf_path,
+            as_attachment=True,
+            download_name=download_filename,
+            mimetype='application/pdf'
+        )
     else:
         # 如果找不到，尝试旧文件名格式
         old_filename = f"{arxiv_id}.pdf"
@@ -1041,12 +1068,130 @@ def redownload_paper(arxiv_id):
         return jsonify({
             'message': '论文重新下载成功',
             'arxiv_id': arxiv_id,
-            'pdf_path': paper_data['pdf_path']
+            'pdf_path': paper_data['pdf_path'],
+            'pdf_exists': True
         })
     except Exception as e:
         import traceback
         print(f"重新下载失败: {e}\n{traceback.format_exc()}")
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/upload_pdf/<arxiv_id>', methods=['POST'])
+def upload_pdf(arxiv_id):
+    """用户手动上传 PDF 文件"""
+    try:
+        conn = sqlite3.connect(app.config['DATABASE'])
+        c = conn.cursor()
+        c.execute('SELECT title, pdf_path, version_history FROM papers WHERE arxiv_id = ?', (arxiv_id,))
+        row = c.fetchone()
+        conn.close()
+
+        if not row:
+            return jsonify({'error': '论文不存在，请先添加论文信息'}), 404
+
+        if 'pdf_file' not in request.files:
+            return jsonify({'error': '请选择 PDF 文件'}), 400
+
+        file = request.files['pdf_file']
+        if file.filename == '':
+            return jsonify({'error': '请选择 PDF 文件'}), 400
+
+        if not file.filename.lower().endswith('.pdf'):
+            return jsonify({'error': '只支持 PDF 文件'}), 400
+
+        # 生成文件名：年份_标题.pdf
+        title = row[0] or arxiv_id
+        clean_title = clean_filename(title)
+        
+        # 从 version_history 提取发表年份（格式：Published 01 Jan 2017, revised ...）
+        version_history = row[2] or ''
+        year = 'unknown'
+        year_match = re.search(r'Published\s+\d+\s+\w+\s+(\d{4})', version_history)
+        if year_match:
+            year = year_match.group(1)
+        else:
+            # 如果 version_history 为空，尝试从 arXiv ID 提取年份
+            # arXiv ID 格式如 1706.03762 -> 2017, 1810.04805 -> 2018
+            arxiv_year_match = re.search(r'(\d{2})\d{2}\.\d+', arxiv_id)
+            if arxiv_year_match:
+                year_short = int(arxiv_year_match.group(1))
+                # arXiv 年份：00-24 是 2000-2024，25-99 是 1990-1999
+                if year_short >= 90:
+                    year = str(1900 + year_short)
+                else:
+                    year = str(2000 + year_short)
+        
+        filename = f"{year}_{clean_title}.pdf"
+        filename = os.path.basename(filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+
+        # 如果已存在旧文件，先删除
+        old_pdf_path = row[1]
+        if old_pdf_path and os.path.exists(old_pdf_path) and old_pdf_path != filepath:
+            try:
+                os.remove(old_pdf_path)
+                # 同时删除关联的 Markdown
+                md_path = get_md_path_from_pdf(old_pdf_path)
+                if md_path and os.path.exists(md_path):
+                    os.remove(md_path)
+            except Exception as e:
+                print(f"删除旧文件失败: {e}")
+
+        # 保存上传的文件
+        file.save(filepath)
+
+        # 验证 PDF 完整性
+        is_valid, error_msg = _verify_pdf_integrity(filepath)
+        if not is_valid:
+            os.remove(filepath)
+            return jsonify({'error': f'PDF 文件验证失败: {error_msg}'}), 400
+
+        # 更新数据库
+        conn = sqlite3.connect(app.config['DATABASE'])
+        c = conn.cursor()
+        c.execute('UPDATE papers SET pdf_path=? WHERE arxiv_id=?', (filepath, arxiv_id))
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            'message': 'PDF 上传成功',
+            'arxiv_id': arxiv_id,
+            'pdf_path': filepath,
+            'pdf_exists': True
+        })
+    except Exception as e:
+        import traceback
+        print(f"上传 PDF 失败: {e}\n{traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/check_pdf/<arxiv_id>')
+def check_pdf(arxiv_id):
+    """检查 PDF 文件是否存在且有效"""
+    try:
+        conn = sqlite3.connect(app.config['DATABASE'])
+        c = conn.cursor()
+        c.execute('SELECT pdf_path FROM papers WHERE arxiv_id = ?', (arxiv_id,))
+        row = c.fetchone()
+        conn.close()
+
+        if not row or not row[0]:
+            return jsonify({'exists': False, 'valid': False, 'error': '无 PDF 路径'})
+
+        pdf_path = row[0]
+        if not os.path.exists(pdf_path):
+            return jsonify({'exists': False, 'valid': False, 'error': 'PDF 文件不存在'})
+
+        is_valid, error_msg = _verify_pdf_integrity(pdf_path)
+        return jsonify({
+            'exists': True,
+            'valid': is_valid,
+            'error': error_msg if not is_valid else None,
+            'pdf_path': pdf_path
+        })
+    except Exception as e:
+        return jsonify({'exists': False, 'valid': False, 'error': str(e)}), 500
 
 
 if __name__ == '__main__':

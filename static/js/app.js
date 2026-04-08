@@ -211,6 +211,9 @@ function updateResultDisplay(data) {
         currentArxivId = data.arxiv_id;
     }
 
+    // 更新 PDF 按钮状态
+    checkAndUpdatePdfStatus();
+
     // 更新总结
     const summaryDiv = document.getElementById('paperSummary');
     const statusBadge = document.getElementById('summaryStatus');
@@ -428,7 +431,162 @@ async function downloadPDF() {
         return;
     }
     
-    window.open(`/api/download/${currentArxivId}`, '_blank');
+    // 先检查 PDF 是否存在
+    try {
+        const response = await fetch(`/api/check_pdf/${currentArxivId}`);
+        const data = await response.json();
+        
+        if (!data.exists || !data.valid) {
+            showToast(data.error || 'PDF 文件不存在或已损坏', 'error');
+            updatePdfButtonState(false);
+            return;
+        }
+        
+        window.open(`/api/download/${currentArxivId}`, '_blank');
+    } catch (error) {
+        showToast('检查 PDF 状态失败', 'error');
+    }
+}
+
+// 检查并更新 PDF 状态
+async function checkAndUpdatePdfStatus() {
+    if (!currentArxivId) return;
+    
+    try {
+        const response = await fetch(`/api/check_pdf/${currentArxivId}`);
+        const data = await response.json();
+        updatePdfButtonState(data.exists && data.valid);
+    } catch (error) {
+        console.error('检查 PDF 状态失败:', error);
+        updatePdfButtonState(false);
+    }
+}
+
+// 更新 PDF 按钮状态
+function updatePdfButtonState(pdfExists) {
+    const downloadBtn = document.getElementById('downloadPdfBtn');
+    const redownloadBtn = document.getElementById('redownloadPdfBtn');
+    const uploadBtn = document.getElementById('uploadPdfBtn');
+    
+    // 三个按钮始终显示在按钮组中
+    downloadBtn.style.display = 'inline-block';
+    redownloadBtn.style.display = 'inline-block';
+    uploadBtn.style.display = 'inline-block';
+    
+    if (pdfExists) {
+        // PDF 存在且有效：下载按钮可用，重新下载和上传作为辅助选项
+        downloadBtn.disabled = false;
+        downloadBtn.classList.remove('btn-outline-secondary');
+        downloadBtn.classList.add('btn-outline-primary');
+        redownloadBtn.disabled = false;
+        uploadBtn.disabled = false;
+    } else {
+        // PDF 不存在或损坏：下载按钮禁用，提示用户使用重新下载或上传
+        downloadBtn.disabled = true;
+        downloadBtn.classList.remove('btn-outline-primary');
+        downloadBtn.classList.add('btn-outline-secondary');
+        redownloadBtn.disabled = false;
+        uploadBtn.disabled = false;
+    }
+}
+
+// 重新下载 PDF
+async function redownloadPDF() {
+    if (!currentArxivId) {
+        showToast('请先选择论文', 'warning');
+        return;
+    }
+    
+    const btn = document.getElementById('redownloadPdfBtn');
+    const originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    
+    try {
+        const response = await fetch(`/api/redownload/${currentArxivId}`, {
+            method: 'POST'
+        });
+        const data = await response.json();
+        
+        if (response.ok) {
+            showToast(data.message, 'success');
+            updatePdfButtonState(true);
+        } else {
+            showToast(data.error || '重新下载失败', 'error');
+            updatePdfButtonState(false);
+        }
+    } catch (error) {
+        showToast('网络错误，请重试', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+    }
+}
+
+// 显示上传 PDF 模态框
+function showUploadPdfModal() {
+    if (!currentArxivId) {
+        showToast('请先选择论文', 'warning');
+        return;
+    }
+    
+    document.getElementById('uploadArxivId').textContent = currentArxivId;
+    document.getElementById('pdfFileInput').value = '';
+    document.getElementById('uploadProgress').style.display = 'none';
+    
+    const modal = new bootstrap.Modal(document.getElementById('uploadPdfModal'));
+    modal.show();
+}
+
+// 上传 PDF
+async function uploadPDF() {
+    if (!currentArxivId) {
+        showToast('请先选择论文', 'warning');
+        return;
+    }
+    
+    const fileInput = document.getElementById('pdfFileInput');
+    const file = fileInput.files[0];
+    
+    if (!file) {
+        showToast('请选择 PDF 文件', 'warning');
+        return;
+    }
+    
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+        showToast('只支持 PDF 文件', 'warning');
+        return;
+    }
+    
+    const progressDiv = document.getElementById('uploadProgress');
+    progressDiv.style.display = 'block';
+    
+    const formData = new FormData();
+    formData.append('pdf_file', file);
+    
+    try {
+        const response = await fetch(`/api/upload_pdf/${currentArxivId}`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        
+        // 关闭模态框
+        const modal = bootstrap.Modal.getInstance(document.getElementById('uploadPdfModal'));
+        modal.hide();
+        
+        if (response.ok) {
+            showToast(data.message, 'success');
+            updatePdfButtonState(true);
+        } else {
+            showToast(data.error || '上传失败', 'error');
+        }
+    } catch (error) {
+        showToast('网络错误，请重试', 'error');
+    } finally {
+        progressDiv.style.display = 'none';
+    }
 }
 
 // 显示历史记录
