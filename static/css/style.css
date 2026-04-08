@@ -187,7 +187,116 @@ code {
     color: #d63384;
 }
 
-/* 列表组样式 */
+/* 全文分析 Markdown 容器 */
+.full-analysis-container {
+    background: #f8fff8;
+    border: 1px solid rgba(40, 167, 69, 0.2);
+    border-left: 4px solid #28a745;
+    border-radius: 10px;
+    padding: 1.5rem 2rem;
+    line-height: 1.8;
+    color: #2c3e50;
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+.full-analysis-container h1,
+.full-analysis-container h2 {
+    color: #1a6b3c;
+    border-bottom: 1px solid #c3e6cb;
+    padding-bottom: 0.3rem;
+    margin-top: 1.2rem;
+}
+
+.full-analysis-container h3,
+.full-analysis-container h4 {
+    color: #155724;
+    margin-top: 1rem;
+}
+
+.full-analysis-container p {
+    margin-bottom: 0.8rem;
+}
+
+.full-analysis-container ul,
+.full-analysis-container ol {
+    padding-left: 1.5rem;
+}
+
+.full-analysis-container li {
+    margin-bottom: 0.3rem;
+}
+
+.full-analysis-container code {
+    background: #e8f5e9;
+    color: #1b5e20;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.88em;
+}
+
+.full-analysis-container pre {
+    background: #e8f5e9;
+    border-radius: 6px;
+    padding: 1rem;
+    overflow-x: auto;
+}
+
+.full-analysis-container blockquote {
+    border-left: 3px solid #28a745;
+    margin-left: 0;
+    padding-left: 1rem;
+    color: #495057;
+    font-style: italic;
+}
+
+.full-analysis-container strong {
+    color: #155724;
+}
+
+.full-analysis-container table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+}
+
+.full-analysis-container th,
+.full-analysis-container td {
+    border: 1px solid #c3e6cb;
+    padding: 0.5rem 0.8rem;
+    text-align: left;
+}
+
+.full-analysis-container th {
+    background: #d4edda;
+    font-weight: 600;
+}
+
+/* KaTeX 公式样式 */
+.full-analysis-container .katex {
+    font-size: 1.1em;
+}
+
+.full-analysis-container .katex-display {
+    margin: 1rem 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.math-block {
+    background: #f8f9fa;
+    padding: 1rem;
+    border-radius: 6px;
+    margin: 0.5rem 0;
+    text-align: center;
+    overflow-x: auto;
+}
+
+.math-inline {
+    background: #f8f9fa;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+}
 .list-group-item {
     border-radius: 8px !important;
     margin-bottom: 0.25rem;

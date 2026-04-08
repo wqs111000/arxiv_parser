@@ -6,7 +6,10 @@
     <title>arXiv 论文总结工具</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- KaTeX for math formula rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
     <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
     <div class="container-fluid">
@@ -44,11 +47,25 @@
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" id="enableAISummary" checked>
                                         <label class="form-check-label" for="enableAISummary">
-                                            <i class="fas fa-robot me-1"></i>启用 AI 总结
+                                            <i class="fas fa-robot me-1"></i>启用摘要总结
                                         </label>
                                     </div>
                                     <div class="form-text text-muted small">
-                                        启用后将使用配置的 AI 模型生成论文总结
+                                        启用后将使用配置的 AI 模型根据论文摘要生成论文总结
+                                    </div>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="enableFullAnalysis">
+                                        <label class="form-check-label" for="enableFullAnalysis">
+                                            <i class="fas fa-file-alt me-1"></i>启用全文分析
+                                            <span class="badge bg-warning text-dark ms-1" style="font-size:0.7em;">高 token</span>
+                                        </label>
+                                    </div>
+                                    <div class="form-text text-muted small">
+                                        <i class="fas fa-exclamation-triangle text-warning me-1"></i>
+                                        将上传完整 PDF 进行深度分析，<strong>token 消耗显著大于摘要总结</strong>，结果以 Markdown 格式展示并可下载
                                     </div>
                                 </div>
                                 
@@ -149,15 +166,46 @@
                                             <i class="fas fa-robot me-1"></i>AI 总结
                                             <span class="badge ms-2" id="summaryStatus">生成中...</span>
                                         </h6>
-                                        <button class="btn btn-sm btn-outline-primary" id="continueAISummaryBtn" style="display: none;" onclick="continueAISummary()">
-                                            <i class="fas fa-play me-1"></i>继续完成 AI 总结
-                                        </button>
+                                        <div>
+                                            <button class="btn btn-sm btn-outline-warning me-1" id="resetSummaryBtn" style="display: none;" onclick="resetAnalysis('summary')">
+                                                <i class="fas fa-redo me-1"></i>重新总结
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-primary" id="continueAISummaryBtn" style="display: none;" onclick="continueAISummary()">
+                                                <i class="fas fa-play me-1"></i>继续完成 AI 总结
+                                            </button>
+                                        </div>
                                     </div>
                                     <div class="alert alert-light mt-2" id="paperSummary" style="display: none;">
                                         <div class="spinner-border spinner-border-sm text-primary" role="status">
                                             <span class="visually-hidden">加载中...</span>
                                         </div>
                                         <span class="ms-2">正在生成总结...</span>
+                                    </div>
+                                </div>
+
+                                <!-- 全文分析 -->
+                                <div class="mb-4" id="fullAnalysisSection" style="display: none;">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <h6 class="text-muted mb-0">
+                                            <i class="fas fa-file-alt me-1"></i>全文分析
+                                            <span class="badge ms-2" id="fullAnalysisStatus">分析中...</span>
+                                        </h6>
+                                        <div>
+                                            <button class="btn btn-sm btn-outline-success me-1" id="downloadAnalysisBtn" style="display: none;" onclick="downloadAnalysis()">
+                                                <i class="fas fa-download me-1"></i>下载 Markdown
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-warning me-1" id="resetFullAnalysisBtn" style="display: none;" onclick="resetAnalysis('full_analysis')">
+                                                <i class="fas fa-redo me-1"></i>重新分析
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-primary" id="startFullAnalysisBtn" style="display: none;" onclick="startFullAnalysis()">
+                                                <i class="fas fa-play me-1"></i>开始全文分析
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div id="fullAnalysisContent" class="full-analysis-container" style="display: none;"></div>
+                                    <div id="fullAnalysisLoading" style="display: none;" class="text-center py-3 text-muted">
+                                        <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+                                        <span class="ms-2">正在进行全文分析，这可能需要较长时间...</span>
                                     </div>
                                 </div>
                             </div>
@@ -209,6 +257,9 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- KaTeX scripts loaded at the end for better performance -->
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>
