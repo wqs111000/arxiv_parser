@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, Response
 from dotenv import load_dotenv
 import os
 import re
@@ -6,9 +6,18 @@ import sqlite3
 import arxiv
 import openai
 import threading
+from pathlib import Path
 
 # 加载 .env 文件
 load_dotenv()
+
+# 导入 prompts 模块
+from prompts import (
+    SYSTEM_PROMPT_SUMMARY,
+    SYSTEM_PROMPT_FULL_ANALYSIS,
+    get_summary_prompt,
+    FULL_ANALYSIS_PROMPT
+)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'arxiv-parser-secret-key'
@@ -35,9 +44,20 @@ def init_db():
             summary TEXT,
             summary_model TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            status TEXT DEFAULT 'pending'
+            status TEXT DEFAULT 'pending',
+            full_analysis TEXT,
+            full_analysis_status TEXT DEFAULT 'none'
         )
     ''')
+    # 兼容旧数据库，若字段不存在则添加
+    try:
+        c.execute('ALTER TABLE papers ADD COLUMN full_analysis TEXT')
+    except Exception:
+        pass
+    try:
+        c.execute("ALTER TABLE papers ADD COLUMN full_analysis_status TEXT DEFAULT 'none'")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -137,21 +157,8 @@ def generate_summary(text, model="gpt-3.5-turbo"):
         if not api_key:
             return "请配置 OPENAI_API_KEY 环境变量"
         
-        prompt = f"""请对下面的学术论文进行结构化总结，总字数 300–500 字，语言简洁专业。
-严格按下面 5 个标题输出，每个标题一段，不要列表、不要符号、不要多余解释。
-TL;DR：
-【一句话概括论文核心贡献】
-动机：
-【说明要解决的问题、现有方法不足、研究意义】
-方法：
-【简述模型、算法、实验设计、技术方案】
-结果：
-【关键指标、对比效果、实验结论】
-总结：
-【论文价值、局限、未来方向】
-论文内容：
-{text}
-"""
+        # 使用 prompts 模块生成 prompt
+        prompt = get_summary_prompt(text)
         
         # 导入 OpenAI 并创建客户端 - 移除代理参数
         import openai
@@ -172,7 +179,7 @@ TL;DR：
             response = client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": "You are a professional paper analyst.You should avoid unnecessarily long replies and instead provide concise, detailed, and precise answers using correct terminology.。"},
+                    {"role": "system", "content": SYSTEM_PROMPT_SUMMARY},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
@@ -191,7 +198,56 @@ TL;DR：
         print(f"详细错误: {traceback.format_exc()}")
         return f"总结生成失败: {str(e)}"
 
-def save_paper_to_db(paper_data, summary=None, model=None, status=None):
+def generate_full_analysis(pdf_path, model="qwen-long"):
+    """使用 qwen-long 对完整 PDF 进行全文分析，返回 markdown 字符串"""
+    try:
+        api_key = os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        base_url = os.environ.get("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+
+        if not api_key:
+            return "请配置 DASHSCOPE_API_KEY 或 OPENAI_API_KEY 环境变量"
+
+        import openai as _openai
+        client = _openai.OpenAI(api_key=api_key, base_url=base_url)
+
+        file_path = Path(pdf_path)
+        if not file_path.exists():
+            return f"PDF 文件不存在：{pdf_path}"
+
+        # 上传文件
+        with open(file_path, "rb") as f:
+            file_object = client.files.create(file=f, purpose="file-extract")
+
+        # 调用 qwen-long 进行全文分析
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {'role': 'system', 'content': SYSTEM_PROMPT_FULL_ANALYSIS},
+                {'role': 'system', 'content': f'fileid://{file_object.id}'},
+                {
+                    'role': 'user',
+                    'content': FULL_ANALYSIS_PROMPT
+                }
+            ],
+            stream=True,
+            stream_options={"include_usage": True}
+        )
+
+        full_content = ""
+        for chunk in completion:
+            if chunk.choices and chunk.choices[0].delta.content:
+                full_content += chunk.choices[0].delta.content
+
+        return full_content if full_content else "全文分析生成失败，返回内容为空"
+
+    except Exception as e:
+        import traceback
+        print(f"全文分析失败: {e}\n{traceback.format_exc()}")
+        return f"全文分析失败: {str(e)}"
+
+
+def save_paper_to_db(paper_data, summary=None, model=None, status=None,
+                     full_analysis=None, full_analysis_status=None):
     """保存论文信息到数据库"""
     conn = sqlite3.connect(app.config['DATABASE'])
     c = conn.cursor()
@@ -203,11 +259,16 @@ def save_paper_to_db(paper_data, summary=None, model=None, status=None):
         else:
             status = 'downloaded'
     
+    # 确定全文分析状态
+    if full_analysis_status is None:
+        full_analysis_status = 'none'
+    
     try:
         c.execute('''
             INSERT OR REPLACE INTO papers 
-            (arxiv_id, title, authors, abstract, url, pdf_path, version_history, summary, summary_model, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (arxiv_id, title, authors, abstract, url, pdf_path, version_history, summary, summary_model, status,
+             full_analysis, full_analysis_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             paper_data['arxiv_id'],
             paper_data['title'],
@@ -218,7 +279,9 @@ def save_paper_to_db(paper_data, summary=None, model=None, status=None):
             paper_data.get('version_history', ''),
             summary,
             model,
-            status
+            status,
+            full_analysis,
+            full_analysis_status
         ))
         conn.commit()
     except Exception as e:
@@ -232,15 +295,20 @@ def get_paper_history():
     """获取论文历史记录"""
     conn = sqlite3.connect(app.config['DATABASE'])
     c = conn.cursor()
-    
+
     c.execute('''
-        SELECT id, arxiv_id, title, version_history, created_at, status, summary 
-        FROM papers 
+        SELECT id, arxiv_id, title, version_history, created_at, status, summary,
+               full_analysis_status, pdf_path
+        FROM papers
         ORDER BY created_at DESC
     ''')
-    
+
     papers = []
     for row in c.fetchall():
+        pdf_path = row[8]
+        md_path = get_md_path_from_pdf(pdf_path)
+        md_exists = os.path.exists(md_path) if md_path else False
+
         papers.append({
             'id': row[0],
             'arxiv_id': row[1],
@@ -248,9 +316,12 @@ def get_paper_history():
             'version_history': row[3],
             'created_at': row[4],
             'status': row[5],
-            'summary': row[6]
+            'summary': row[6],
+            'full_analysis_status': row[7] or 'none',
+            'md_file_path': md_path if md_exists else None,
+            'md_exists': md_exists
         })
-    
+
     conn.close()
     return papers
 
@@ -263,9 +334,11 @@ def process_paper():
     data = request.get_json()
     arxiv_url = data.get('url')
     enable_ai = data.get('enable_ai', True)  # 是否启用AI总结，默认为True
+    enable_full_analysis = data.get('enable_full_analysis', False)  # 是否启用全文分析
     
     # 从环境变量获取模型配置
     model = os.environ.get("DEFAULT_MODEL", "deepseek-chat")
+    full_analysis_model = os.environ.get("FULL_ANALYSIS_MODEL", "qwen-long")
     
     if not arxiv_url:
         return jsonify({'error': '请输入arXiv链接'}), 400
@@ -294,45 +367,64 @@ def process_paper():
         return jsonify({'error': '下载论文失败'}), 500
     
     if enable_ai:
+        # 确定初始全文分析状态
+        init_fa_status = 'processing' if enable_full_analysis else 'none'
         # 保存基本信息，状态设为 processing
-        save_paper_to_db(paper_data, status='processing')
+        save_paper_to_db(paper_data, status='processing', full_analysis_status=init_fa_status)
         
-        # 异步生成总结
+        # 异步生成摘要总结（+ 可选全文分析）
         def async_generate_summary():
             try:
                 summary = generate_summary(paper_data['abstract'], model)
                 if summary and not summary.startswith("总结生成失败"):
-                    save_paper_to_db(paper_data, summary, model, status='completed')
+                    save_paper_to_db(paper_data, summary, model, status='completed',
+                                     full_analysis_status=init_fa_status)
                 else:
                     print(f"总结生成失败: {summary}")
-                    # 标记为失败，避免前端一直停留在 processing
-                    save_paper_to_db(paper_data, summary=None, model=None, status='failed')
+                    save_paper_to_db(paper_data, summary=None, model=None, status='failed',
+                                     full_analysis_status=init_fa_status)
             except Exception as e:
                 print(f"异步生成总结异常: {e}")
                 import traceback
                 print(f"详细错误: {traceback.format_exc()}")
-                # 异常时同样标记为失败
-                save_paper_to_db(paper_data, summary=None, model=None, status='failed')
+                save_paper_to_db(paper_data, summary=None, model=None, status='failed',
+                                 full_analysis_status=init_fa_status)
         
         thread = threading.Thread(target=async_generate_summary)
         thread.start()
+        
+        # 如果启用全文分析，单独异步处理
+        if enable_full_analysis:
+            def async_full_analysis():
+                _run_full_analysis(arxiv_id, paper_data, full_analysis_model)
+            fa_thread = threading.Thread(target=async_full_analysis)
+            fa_thread.start()
         
         return jsonify({
             'message': '论文下载成功，正在生成总结...',
             'arxiv_id': arxiv_id,
             'title': paper_data['title'],
             'model': model,
-            'status': 'processing'
+            'status': 'processing',
+            'full_analysis_status': init_fa_status
         })
     else:
-        # 只下载不生成总结
-        save_paper_to_db(paper_data, status='downloaded')
+        # 未启用AI总结
+        init_fa_status = 'processing' if enable_full_analysis else 'none'
+        save_paper_to_db(paper_data, status='downloaded', full_analysis_status=init_fa_status)
+        
+        if enable_full_analysis:
+            def async_full_analysis():
+                _run_full_analysis(arxiv_id, paper_data, full_analysis_model)
+            fa_thread = threading.Thread(target=async_full_analysis)
+            fa_thread.start()
         
         return jsonify({
             'message': '论文下载成功（未启用AI总结）',
             'arxiv_id': arxiv_id,
             'title': paper_data['title'],
-            'status': 'downloaded'
+            'status': 'downloaded',
+            'full_analysis_status': init_fa_status
         })
 
 @app.route('/api/status/<arxiv_id>')
@@ -340,13 +432,38 @@ def get_status(arxiv_id):
     """获取论文处理状态"""
     conn = sqlite3.connect(app.config['DATABASE'])
     c = conn.cursor()
-    c.execute('SELECT status, summary, title, authors, abstract, summary_model, version_history FROM papers WHERE arxiv_id = ?', (arxiv_id,))
+    c.execute('''SELECT status, summary, title, authors, abstract, summary_model, version_history,
+                        full_analysis_status, full_analysis, pdf_path
+                 FROM papers WHERE arxiv_id = ?''', (arxiv_id,))
     result = c.fetchone()
     conn.close()
-    
+
     if not result:
         return jsonify({'error': '论文不存在'}), 404
-    
+
+    pdf_path = result[9]
+    md_path = get_md_path_from_pdf(pdf_path)
+    md_exists = os.path.exists(md_path) if md_path else False
+
+    # 如果数据库中没有全文分析，但本地有 md 文件，则加载
+    full_analysis = result[8]
+    full_analysis_status = result[7] or 'none'
+
+    if not full_analysis and md_exists:
+        full_analysis = load_analysis_from_md(pdf_path)
+        if full_analysis:
+            full_analysis_status = 'completed'
+            # 可选：同步到数据库
+            try:
+                conn2 = sqlite3.connect(app.config['DATABASE'])
+                c2 = conn2.cursor()
+                c2.execute('UPDATE papers SET full_analysis=?, full_analysis_status=? WHERE arxiv_id=?',
+                           (full_analysis, 'completed', arxiv_id))
+                conn2.commit()
+                conn2.close()
+            except Exception as e:
+                print(f"同步 md 到数据库失败: {e}")
+
     return jsonify({
         'arxiv_id': arxiv_id,
         'status': result[0],
@@ -355,7 +472,11 @@ def get_status(arxiv_id):
         'authors': result[3],
         'abstract': result[4],
         'summary_model': result[5],
-        'version_history': result[6]
+        'version_history': result[6],
+        'full_analysis_status': full_analysis_status,
+        'full_analysis': full_analysis,
+        'md_file_path': md_path if md_exists else None,
+        'md_exists': md_exists
     })
 
 @app.route('/api/history')
@@ -390,16 +511,39 @@ def get_paper_detail(arxiv_id):
     c = conn.cursor()
     c.execute('''
         SELECT arxiv_id, title, authors, abstract, url, pdf_path, version_history,
-               summary, summary_model, created_at, status 
-        FROM papers 
+               summary, summary_model, created_at, status, full_analysis, full_analysis_status
+        FROM papers
         WHERE arxiv_id = ?
     ''', (arxiv_id,))
     result = c.fetchone()
     conn.close()
-    
+
     if not result:
         return jsonify({'error': '论文不存在'}), 404
-    
+
+    pdf_path = result[5]
+    md_path = get_md_path_from_pdf(pdf_path)
+    md_exists = os.path.exists(md_path) if md_path else False
+
+    # 如果数据库中没有全文分析，但本地有 md 文件，则加载
+    full_analysis = result[11]
+    full_analysis_status = result[12] or 'none'
+
+    if not full_analysis and md_exists:
+        full_analysis = load_analysis_from_md(pdf_path)
+        if full_analysis:
+            full_analysis_status = 'completed'
+            # 同步到数据库
+            try:
+                conn2 = sqlite3.connect(app.config['DATABASE'])
+                c2 = conn2.cursor()
+                c2.execute('UPDATE papers SET full_analysis=?, full_analysis_status=? WHERE arxiv_id=?',
+                           (full_analysis, 'completed', arxiv_id))
+                conn2.commit()
+                conn2.close()
+            except Exception as e:
+                print(f"同步 md 到数据库失败: {e}")
+
     return jsonify({
         'arxiv_id': result[0],
         'title': result[1],
@@ -411,8 +555,163 @@ def get_paper_detail(arxiv_id):
         'summary': result[7],
         'summary_model': result[8],
         'created_at': result[9],
-        'status': result[10]
+        'status': result[10],
+        'full_analysis': full_analysis,
+        'full_analysis_status': full_analysis_status,
+        'md_file_path': md_path if md_exists else None,
+        'md_exists': md_exists
     })
+
+def get_md_path_from_pdf(pdf_path):
+    """根据 PDF 路径生成对应的 Markdown 文件路径"""
+    if not pdf_path:
+        return None
+    base = os.path.splitext(pdf_path)[0]
+    return base + '.md'
+
+
+def save_analysis_to_md(pdf_path, analysis_content):
+    """将全文分析保存到 PDF 同目录同名 .md 文件"""
+    try:
+        md_path = get_md_path_from_pdf(pdf_path)
+        if md_path:
+            with open(md_path, 'w', encoding='utf-8') as f:
+                f.write(analysis_content)
+            return md_path
+    except Exception as e:
+        print(f"保存 Markdown 文件失败: {e}")
+    return None
+
+
+def load_analysis_from_md(pdf_path):
+    """从本地 Markdown 文件加载全文分析内容"""
+    try:
+        md_path = get_md_path_from_pdf(pdf_path)
+        if md_path and os.path.exists(md_path):
+            with open(md_path, 'r', encoding='utf-8') as f:
+                return f.read()
+    except Exception as e:
+        print(f"读取 Markdown 文件失败: {e}")
+    return None
+
+
+def _run_full_analysis(arxiv_id, paper_data, model):
+    """在后台执行全文分析并更新数据库（不改变 summary 状态）"""
+    try:
+        analysis = generate_full_analysis(paper_data['pdf_path'], model)
+        conn = sqlite3.connect(app.config['DATABASE'])
+        c = conn.cursor()
+        if analysis and not analysis.startswith("全文分析失败"):
+            # 保存到本地 Markdown 文件
+            save_analysis_to_md(paper_data['pdf_path'], analysis)
+            c.execute(
+                'UPDATE papers SET full_analysis=?, full_analysis_status=? WHERE arxiv_id=?',
+                (analysis, 'completed', arxiv_id)
+            )
+        else:
+            c.execute(
+                'UPDATE papers SET full_analysis=?, full_analysis_status=? WHERE arxiv_id=?',
+                (analysis, 'failed', arxiv_id)
+            )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        import traceback
+        print(f"全文分析异常: {e}\n{traceback.format_exc()}")
+        try:
+            conn = sqlite3.connect(app.config['DATABASE'])
+            c = conn.cursor()
+            c.execute(
+                'UPDATE papers SET full_analysis_status=? WHERE arxiv_id=?',
+                ('failed', arxiv_id)
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+
+@app.route('/api/full_analysis/<arxiv_id>', methods=['POST'])
+def start_full_analysis(arxiv_id):
+    """手动触发全文分析"""
+    try:
+        full_analysis_model = os.environ.get("FULL_ANALYSIS_MODEL", "qwen-long")
+
+        conn = sqlite3.connect(app.config['DATABASE'])
+        c = conn.cursor()
+        c.execute('SELECT title, authors, abstract, url, pdf_path, version_history FROM papers WHERE arxiv_id = ?',
+                  (arxiv_id,))
+        row = c.fetchone()
+        conn.close()
+
+        if not row:
+            return jsonify({'error': '论文不存在'}), 404
+
+        paper_data = {
+            'arxiv_id': arxiv_id,
+            'title': row[0],
+            'authors': row[1],
+            'abstract': row[2],
+            'url': row[3],
+            'pdf_path': row[4],
+            'version_history': row[5],
+        }
+
+        # 更新状态为 processing
+        conn = sqlite3.connect(app.config['DATABASE'])
+        c = conn.cursor()
+        c.execute('UPDATE papers SET full_analysis_status=? WHERE arxiv_id=?', ('processing', arxiv_id))
+        conn.commit()
+        conn.close()
+
+        def async_fa():
+            _run_full_analysis(arxiv_id, paper_data, full_analysis_model)
+
+        threading.Thread(target=async_fa).start()
+
+        return jsonify({'message': '开始全文分析...', 'arxiv_id': arxiv_id, 'full_analysis_status': 'processing'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/download_analysis/<arxiv_id>')
+def download_analysis(arxiv_id):
+    """下载全文分析 Markdown，使用与本地保存相同的文件名"""
+    conn = sqlite3.connect(app.config['DATABASE'])
+    c = conn.cursor()
+    c.execute('SELECT full_analysis, pdf_path, title FROM papers WHERE arxiv_id = ?', (arxiv_id,))
+    result = c.fetchone()
+    conn.close()
+
+    if not result or not result[0]:
+        return jsonify({'error': '全文分析不存在'}), 404
+
+    full_analysis, pdf_path, title = result
+    
+    # 使用与本地保存相同的文件名逻辑：与 PDF 同名，只改后缀为 .md
+    if pdf_path:
+        md_path = get_md_path_from_pdf(pdf_path)
+        if md_path:
+            filename = os.path.basename(md_path)
+        else:
+            filename = f"{arxiv_id}.md"
+    else:
+        # 没有 pdf_path 时，使用 arxiv_id 作为文件名
+        filename = f"{arxiv_id}.md"
+    
+    # 使用 quote 对文件名进行 URL 编码，支持中文
+    from urllib.parse import quote
+    encoded_filename = quote(filename)
+
+    return Response(
+        full_analysis,
+        mimetype='text/markdown; charset=utf-8',
+        headers={
+            'Content-Disposition': f"attachment; filename*=UTF-8''{encoded_filename}",
+            'Content-Type': 'text/markdown; charset=utf-8'
+        }
+    )
+
 
 @app.route('/api/continue_ai/<arxiv_id>', methods=['POST'])
 def continue_ai_summary(arxiv_id):
@@ -424,12 +723,14 @@ def continue_ai_summary(arxiv_id):
         # 获取论文信息
         conn = sqlite3.connect(app.config['DATABASE'])
         c = conn.cursor()
-        c.execute('SELECT title, authors, abstract, url, pdf_path, version_history FROM papers WHERE arxiv_id = ?', (arxiv_id,))
+        c.execute('SELECT title, authors, abstract, url, pdf_path, version_history, full_analysis_status FROM papers WHERE arxiv_id = ?', (arxiv_id,))
         paper_data = c.fetchone()
         conn.close()
         
         if not paper_data:
             return jsonify({'error': '论文不存在'}), 404
+        
+        existing_fa_status = paper_data[6] or 'none'
         
         # 构建完整的论文数据
         paper_info = {
@@ -442,25 +743,40 @@ def continue_ai_summary(arxiv_id):
             'version_history': paper_data[5],
         }
         
-        # 先更新状态为 processing
-        save_paper_to_db(paper_info, status='processing')
+        # 先更新状态为 processing（保留 full_analysis_status）
+        conn = sqlite3.connect(app.config['DATABASE'])
+        c = conn.cursor()
+        c.execute('UPDATE papers SET status=? WHERE arxiv_id=?', ('processing', arxiv_id))
+        conn.commit()
+        conn.close()
         
         # 异步生成总结
         def async_generate_summary():
             try:
                 summary = generate_summary(paper_info['abstract'], model)
                 if summary and not summary.startswith("总结生成失败"):
-                    save_paper_to_db(paper_info, summary, model, status='completed')
+                    conn2 = sqlite3.connect(app.config['DATABASE'])
+                    c2 = conn2.cursor()
+                    c2.execute('UPDATE papers SET summary=?, summary_model=?, status=? WHERE arxiv_id=?',
+                               (summary, model, 'completed', arxiv_id))
+                    conn2.commit()
+                    conn2.close()
                 else:
                     print(f"总结生成失败: {summary}")
-                    # 标记为失败，避免前端一直停留在 processing
-                    save_paper_to_db(paper_info, summary=None, model=None, status='failed')
+                    conn2 = sqlite3.connect(app.config['DATABASE'])
+                    c2 = conn2.cursor()
+                    c2.execute('UPDATE papers SET status=? WHERE arxiv_id=?', ('failed', arxiv_id))
+                    conn2.commit()
+                    conn2.close()
             except Exception as e:
                 print(f"异步生成总结异常: {e}")
                 import traceback
                 print(f"详细错误: {traceback.format_exc()}")
-                # 异常时同样标记为失败
-                save_paper_to_db(paper_info, summary=None, model=None, status='failed')
+                conn2 = sqlite3.connect(app.config['DATABASE'])
+                c2 = conn2.cursor()
+                c2.execute('UPDATE papers SET status=? WHERE arxiv_id=?', ('failed', arxiv_id))
+                conn2.commit()
+                conn2.close()
         
         thread = threading.Thread(target=async_generate_summary)
         thread.start()
@@ -472,6 +788,55 @@ def continue_ai_summary(arxiv_id):
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reset_analysis/<arxiv_id>', methods=['POST'])
+def reset_analysis(arxiv_id):
+    """重置分析状态，允许重新进行 AI 总结和全文分析"""
+    try:
+        data = request.get_json() or {}
+        reset_type = data.get('type', 'all')  # 'all', 'summary', 'full_analysis'
+        
+        conn = sqlite3.connect(app.config['DATABASE'])
+        c = conn.cursor()
+        
+        # 获取当前论文信息
+        c.execute('SELECT pdf_path FROM papers WHERE arxiv_id = ?', (arxiv_id,))
+        result = c.fetchone()
+        if not result:
+            conn.close()
+            return jsonify({'error': '论文不存在'}), 404
+        
+        pdf_path = result[0]
+        
+        if reset_type == 'all' or reset_type == 'summary':
+            # 重置 AI 总结
+            c.execute('UPDATE papers SET summary=?, summary_model=?, status=? WHERE arxiv_id=?',
+                      (None, None, 'downloaded', arxiv_id))
+        
+        if reset_type == 'all' or reset_type == 'full_analysis':
+            # 重置全文分析
+            c.execute('UPDATE papers SET full_analysis=?, full_analysis_status=? WHERE arxiv_id=?',
+                      (None, 'none', arxiv_id))
+            # 删除本地 md 文件
+            if pdf_path:
+                md_path = get_md_path_from_pdf(pdf_path)
+                if md_path and os.path.exists(md_path):
+                    try:
+                        os.remove(md_path)
+                    except Exception as e:
+                        print(f"删除 md 文件失败: {e}")
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'message': '分析状态已重置',
+            'arxiv_id': arxiv_id,
+            'reset_type': reset_type
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     flask_port = int(os.environ.get("FLASK_PORT", 5000))

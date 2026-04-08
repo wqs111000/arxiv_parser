@@ -21,19 +21,37 @@ document.addEventListener('DOMContentLoaded', function() {
 // 加载历史记录（侧边栏）
 async function loadHistorySide() {
     const historyList = document.getElementById('historyListSide');
-    
+
     historyList.innerHTML = '<div class="text-center py-3 text-muted"><div class="spinner-border spinner-border-sm text-primary" role="status"><span class="visually-hidden">加载中...</span></div><p class="mt-2 mb-0">加载历史记录...</p></div>';
-    
+
     try {
         const response = await fetch('/api/history');
         const papers = await response.json();
-        
+
         if (papers.length === 0) {
             historyList.innerHTML = '<div class="text-center py-4 text-muted">暂无历史记录</div>';
             return;
         }
-        
-        historyList.innerHTML = papers.map(paper => `
+
+        historyList.innerHTML = papers.map(paper => {
+            // 判断状态：有摘要、有全文分析(md文件)
+            const hasSummary = !!paper.summary;
+            const hasMd = paper.md_exists;
+            const faStatus = paper.full_analysis_status || 'none';
+
+            // 状态图标
+            let statusIcon = '';
+            if (hasSummary && hasMd) {
+                statusIcon = '<i class="fas fa-check-double text-success" title="AI总结和全文分析已完成"></i>';
+            } else if (hasSummary) {
+                statusIcon = '<i class="fas fa-check-circle text-primary" title="AI总结已完成"></i>';
+            } else if (hasMd) {
+                statusIcon = '<i class="fas fa-file-alt text-info" title="全文分析文件已存在"></i>';
+            } else {
+                statusIcon = '<i class="fas fa-hourglass-half text-warning" title="待处理"></i>';
+            }
+
+            return `
             <div class="card mb-2 history-item ${paper.status}" onclick="loadPaperFromHistory('${paper.arxiv_id}')" style="cursor: pointer;">
                 <div class="card-body p-3">
                     <div class="d-flex justify-content-between align-items-start">
@@ -45,14 +63,19 @@ async function loadHistorySide() {
                             <p class="text-muted small mb-0">
                                 <i class="fas fa-clock me-1"></i>${formatDate(paper.created_at)}
                             </p>
+                            <div class="mt-1">
+                                ${hasSummary ? '<span class="badge bg-primary me-1" style="font-size:0.6em;">总结</span>' : ''}
+                                ${hasMd ? '<span class="badge bg-success me-1" style="font-size:0.6em;">全文</span>' : ''}
+                                ${(!hasSummary && !hasMd) ? '<span class="badge bg-secondary" style="font-size:0.6em;">仅下载</span>' : ''}
+                            </div>
                         </div>
                         <div class="ms-2">
-                            ${paper.summary ? '<i class="fas fa-check-circle text-success"></i>' : '<i class="fas fa-hourglass-half text-warning"></i>'}
+                            ${statusIcon}
                         </div>
                     </div>
                 </div>
             </div>
-        `).join('');
+        `}).join('');
     } catch (error) {
         historyList.innerHTML = '<div class="text-center py-4 text-danger">加载失败</div>';
     }
@@ -64,6 +87,7 @@ async function handleFormSubmit(e) {
     
     const url = document.getElementById('arxivUrl').value.trim();
     const enableAI = document.getElementById('enableAISummary').checked;
+    const enableFullAnalysis = document.getElementById('enableFullAnalysis').checked;
     const submitBtn = document.getElementById('submitBtn');
     
     if (!url) {
@@ -81,7 +105,7 @@ async function handleFormSubmit(e) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ url, enable_ai: enableAI })
+            body: JSON.stringify({ url, enable_ai: enableAI, enable_full_analysis: enableFullAnalysis })
         });
         
         const data = await response.json();
@@ -92,8 +116,8 @@ async function handleFormSubmit(e) {
             
             if (data.status === 'existing') {
                 loadPaperData(currentArxivId);
-            } else if (data.status === 'downloaded') {
-                // 未启用AI总结，直接加载论文数据
+            } else if (data.status === 'downloaded' && (data.full_analysis_status || 'none') === 'none') {
+                // 未启用AI总结且未启用全文分析，直接加载论文数据
                 loadPaperData(currentArxivId);
             } else {
                 // 开始检查状态（processing）
@@ -118,13 +142,13 @@ function startStatusChecking() {
     // 每3秒检查一次
     statusCheckInterval = setInterval(checkPaperStatus, 3000);
     
-    // 30秒后停止自动检查
+    // 5分钟后停止自动检查（全文分析可能耗时较长）
     setTimeout(() => {
         if (statusCheckInterval) {
             clearInterval(statusCheckInterval);
             statusCheckInterval = null;
         }
-    }, 30000);
+    }, 300000);
 }
 
 // 检查论文状态
@@ -138,8 +162,12 @@ async function checkPaperStatus() {
         if (response.ok) {
             updateResultDisplay(data);
             
-            // 如果总结已完成，停止检查
-            if (data.status === 'completed' && data.summary) {
+            // 摘要和全文分析都完成（或无需等待），才停止轮询
+            const summaryDone = data.status === 'completed' || data.status === 'downloaded' || data.status === 'failed';
+            const faStatus = data.full_analysis_status || 'none';
+            const faDone = faStatus === 'completed' || faStatus === 'failed' || faStatus === 'none';
+            
+            if (summaryDone && faDone) {
                 if (statusCheckInterval) {
                     clearInterval(statusCheckInterval);
                     statusCheckInterval = null;
@@ -156,12 +184,12 @@ function updateResultDisplay(data) {
     // 显示结果容器
     document.getElementById('emptyState').style.display = 'none';
     document.getElementById('resultContainer').style.display = 'block';
-    
+
     // 更新论文信息
     document.getElementById('paperTitle').textContent = data.title || '未知标题';
     document.getElementById('paperAuthors').textContent = data.authors || '未知作者';
     document.getElementById('paperAbstract').textContent = data.abstract || '暂无摘要';
-    
+
     // 显示版本记录（如果有）
     if (data.version_history) {
         const versionHistory = document.getElementById('versionHistory');
@@ -169,7 +197,7 @@ function updateResultDisplay(data) {
         versionHistory.style.display = 'block';
         versionInfo.textContent = data.version_history;
     }
-    
+
     // 显示使用的模型（如果有）
     if (data.summary_model || data.model) {
         const modelInfo = document.getElementById('modelInfo');
@@ -177,17 +205,21 @@ function updateResultDisplay(data) {
         modelInfo.style.display = 'block';
         modelName.textContent = data.summary_model || data.model;
     }
-    
+
     // 保存当前论文ID用于继续AI总结（如果后端返回了 arxiv_id 就更新，否则保留现有值）
     if (data.arxiv_id) {
         currentArxivId = data.arxiv_id;
     }
-    
+
     // 更新总结
     const summaryDiv = document.getElementById('paperSummary');
     const statusBadge = document.getElementById('summaryStatus');
     const continueBtn = document.getElementById('continueAISummaryBtn');
-    
+    const resetSummaryBtn = document.getElementById('resetSummaryBtn');
+
+    // 检查是否有本地 md 文件（用于判断是否可以补充全文分析）
+    const hasLocalMd = data.md_exists;
+
     if (data.status === 'completed') {
         if (data.summary) {
             summaryDiv.innerHTML = data.summary.replace(/\n/g, '<br>');
@@ -199,6 +231,7 @@ function updateResultDisplay(data) {
         statusBadge.textContent = '已完成';
         statusBadge.className = 'badge bg-success';
         continueBtn.style.display = 'none';
+        resetSummaryBtn.style.display = 'inline-block';
     } else if (data.status === 'processing') {
         summaryDiv.innerHTML = `
             <div class="spinner-border spinner-border-sm text-primary" role="status">
@@ -210,23 +243,182 @@ function updateResultDisplay(data) {
         statusBadge.textContent = '生成中';
         statusBadge.className = 'badge bg-warning';
         continueBtn.style.display = 'none';
+        resetSummaryBtn.style.display = 'none';
     } else if (data.status === 'downloaded') {
         summaryDiv.style.display = 'none';
         statusBadge.textContent = '未启用';
         statusBadge.className = 'badge bg-secondary';
+        // 始终显示"继续完成 AI 总结"按钮，让用户可以随时启用摘要总结
         continueBtn.style.display = 'inline-block';
+        resetSummaryBtn.style.display = 'none';
     } else if (data.status === 'failed') {
-        summaryDiv.innerHTML = '<em>AI 总结生成失败，请点击“继续完成 AI 总结”重试</em>';
+        summaryDiv.innerHTML = '<em>AI 总结生成失败，请点击"继续完成 AI 总结"重试</em>';
         summaryDiv.style.display = 'block';
         statusBadge.textContent = '失败';
         statusBadge.className = 'badge bg-danger';
         continueBtn.style.display = 'inline-block';
+        resetSummaryBtn.style.display = 'none';
     } else {
         summaryDiv.style.display = 'none';
         statusBadge.textContent = '等待中';
         statusBadge.className = 'badge bg-secondary';
         continueBtn.style.display = 'none';
+        resetSummaryBtn.style.display = 'none';
     }
+
+    // 更新全文分析区域
+    updateFullAnalysisDisplay(data);
+}
+
+// 更新全文分析展示
+function updateFullAnalysisDisplay(data) {
+    const faStatus = data.full_analysis_status || 'none';
+    const faSection = document.getElementById('fullAnalysisSection');
+    const faStatusBadge = document.getElementById('fullAnalysisStatus');
+    const faContent = document.getElementById('fullAnalysisContent');
+    const faLoading = document.getElementById('fullAnalysisLoading');
+    const downloadBtn = document.getElementById('downloadAnalysisBtn');
+    const startBtn = document.getElementById('startFullAnalysisBtn');
+    const resetFullAnalysisBtn = document.getElementById('resetFullAnalysisBtn');
+
+    // 检查本地是否有 md 文件（从本地加载的）
+    const hasLocalMd = data.md_exists && data.full_analysis;
+
+    // 始终显示全文分析区域（只要有内容或可以开始分析）
+    const canShowSection = faStatus !== 'none' || hasLocalMd || data.pdf_path;
+
+    if (!canShowSection) {
+        faSection.style.display = 'none';
+        return;
+    }
+
+    // 显示全文分析区域
+    faSection.style.display = 'block';
+
+    if (faStatus === 'processing') {
+        faStatusBadge.textContent = '分析中';
+        faStatusBadge.className = 'badge bg-warning';
+        faContent.style.display = 'none';
+        faLoading.style.display = 'block';
+        downloadBtn.style.display = 'none';
+        startBtn.style.display = 'none';
+        resetFullAnalysisBtn.style.display = 'none';
+    } else if (faStatus === 'completed' || hasLocalMd) {
+        faStatusBadge.textContent = '已完成';
+        faStatusBadge.className = 'badge bg-success';
+        faLoading.style.display = 'none';
+        downloadBtn.style.display = 'inline-block';
+        startBtn.style.display = 'none';
+        resetFullAnalysisBtn.style.display = 'inline-block';
+        if (data.full_analysis) {
+            faContent.innerHTML = renderMarkdown(data.full_analysis);
+            faContent.style.display = 'block';
+        }
+    } else if (faStatus === 'failed') {
+        faStatusBadge.textContent = '失败';
+        faStatusBadge.className = 'badge bg-danger';
+        faLoading.style.display = 'none';
+        faContent.innerHTML = '<em class="text-danger">全文分析失败，请重试</em>';
+        faContent.style.display = 'block';
+        downloadBtn.style.display = 'none';
+        startBtn.style.display = 'inline-block';
+        resetFullAnalysisBtn.style.display = 'none';
+    } else {
+        // 未开始状态，显示开始按钮
+        faStatusBadge.textContent = '未分析';
+        faStatusBadge.className = 'badge bg-secondary';
+        faLoading.style.display = 'none';
+        resetFullAnalysisBtn.style.display = 'none';
+        faContent.style.display = 'none';
+        downloadBtn.style.display = 'none';
+        startBtn.style.display = 'inline-block';
+    }
+}
+
+// 渲染 Markdown（支持 LaTeX 公式）
+function renderMarkdown(text) {
+    if (!text) return '';
+
+    // 先保护代码块中的内容，避免被公式解析干扰
+    const codeBlocks = [];
+    let protectedText = text.replace(/```[\s\S]*?```/g, (match) => {
+        codeBlocks.push(match);
+        return `\x00CODE_BLOCK_${codeBlocks.length - 1}\x00`;
+    });
+
+    // 保护行内代码
+    const inlineCodes = [];
+    protectedText = protectedText.replace(/`[^`]+`/g, (match) => {
+        inlineCodes.push(match);
+        return `\x00INLINE_CODE_${inlineCodes.length - 1}\x00`;
+    });
+
+    // 转换 LaTeX 公式为占位符，避免被 marked 解析
+    const mathExpressions = [];
+
+    // 保护块级公式 $$...$$
+    protectedText = protectedText.replace(/\$\$([\s\S]*?)\$\$/g, (match, formula) => {
+        mathExpressions.push({ type: 'block', formula: formula.trim() });
+        return `\x00MATH_${mathExpressions.length - 1}\x00`;
+    });
+
+    // 保护行内公式 $...$（更宽松的匹配，排除常见货币格式）
+    protectedText = protectedText.replace(/\$([^\$\s][^\$]*?)\$/g, (match, formula) => {
+        // 排除纯数字（可能是价格）
+        if (/^\d+(\.\d{1,2})?$/.test(formula.trim())) {
+            return match;
+        }
+        // 排除常见的货币格式如 $100, $1.99
+        if (/^\d+(,\d{3})*(\.\d{1,2})?$/.test(formula.trim())) {
+            return match;
+        }
+        mathExpressions.push({ type: 'inline', formula: formula.trim() });
+        return `\x00MATH_${mathExpressions.length - 1}\x00`;
+    });
+
+    // 使用 marked 解析 Markdown
+    let html = '';
+    if (typeof marked !== 'undefined') {
+        html = marked.parse(protectedText);
+    } else {
+        html = protectedText.replace(/\n/g, '<br>');
+    }
+
+    // 恢复代码块
+    codeBlocks.forEach((code, i) => {
+        html = html.replace(`\x00CODE_BLOCK_${i}\x00`, code);
+    });
+
+    // 恢复行内代码
+    inlineCodes.forEach((code, i) => {
+        html = html.replace(`\x00INLINE_CODE_${i}\x00`, code);
+    });
+
+    // 恢复并渲染公式
+    mathExpressions.forEach((math, i) => {
+        let rendered = '';
+        try {
+            if (typeof katex !== 'undefined') {
+                rendered = katex.renderToString(math.formula, {
+                    throwOnError: false,
+                    displayMode: math.type === 'block'
+                });
+            } else {
+                // KaTeX 未加载，显示原始文本
+                rendered = math.type === 'block'
+                    ? `<div class="math-block">$$${math.formula}$$</div>`
+                    : `<span class="math-inline">$${math.formula}$</span>`;
+            }
+        } catch (e) {
+            // 渲染失败，显示原始文本
+            rendered = math.type === 'block'
+                ? `<div class="math-block text-danger">$$${math.formula}$$</div>`
+                : `<span class="math-inline text-danger">$${math.formula}$</span>`;
+        }
+        html = html.replace(`\x00MATH_${i}\x00`, rendered);
+    });
+
+    return html;
 }
 
 // 下载PDF
@@ -382,6 +574,96 @@ async function continueAISummary() {
         // 恢复按钮状态
         continueBtn.disabled = false;
         continueBtn.innerHTML = '<i class="fas fa-play me-1"></i>继续完成 AI 总结';
+    }
+}
+
+// 手动开始全文分析
+async function startFullAnalysis() {
+    if (!currentArxivId) {
+        showToast('请先选择论文', 'warning');
+        return;
+    }
+
+    const startBtn = document.getElementById('startFullAnalysisBtn');
+    startBtn.disabled = true;
+    startBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>处理中...';
+
+    try {
+        const response = await fetch(`/api/full_analysis/${currentArxivId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await response.json();
+
+        if (response.ok) {
+            showToast(data.message, 'success');
+            // 立即刷新显示，然后开始轮询
+            checkPaperStatus();
+            startStatusChecking();
+        } else {
+            showToast(data.error || '启动失败', 'error');
+            startBtn.disabled = false;
+            startBtn.innerHTML = '<i class="fas fa-play me-1"></i>开始全文分析';
+        }
+    } catch (error) {
+        showToast('网络错误，请重试', 'error');
+        startBtn.disabled = false;
+        startBtn.innerHTML = '<i class="fas fa-play me-1"></i>开始全文分析';
+    }
+}
+
+// 下载全文分析 Markdown
+function downloadAnalysis() {
+    if (!currentArxivId) {
+        showToast('请先选择论文', 'warning');
+        return;
+    }
+    window.open(`/api/download_analysis/${currentArxivId}`, '_blank');
+}
+
+// 重置分析状态（重新分析）
+async function resetAnalysis(type) {
+    if (!currentArxivId) {
+        showToast('请先选择论文', 'warning');
+        return;
+    }
+
+    const typeText = type === 'summary' ? 'AI 总结' : '全文分析';
+    if (!confirm(`确定要重新进行${typeText}吗？之前的分析结果将被清除。`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/reset_analysis/${currentArxivId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ type: type })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            showToast(data.message, 'success');
+            // 刷新页面显示
+            await loadPaperData(currentArxivId);
+            // 刷新历史记录
+            loadHistorySide();
+            
+            // 根据类型自动开始新的分析
+            if (type === 'summary' || type === 'all') {
+                // 自动开始 AI 总结
+                continueAISummary();
+            } else if (type === 'full_analysis') {
+                // 自动开始全文分析
+                startFullAnalysis();
+            }
+        } else {
+            showToast(data.error || '重置失败', 'error');
+        }
+    } catch (error) {
+        showToast('网络错误，请重试', 'error');
     }
 }
 
