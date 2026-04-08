@@ -92,9 +92,9 @@ def download_paper(arxiv_id):
             # 检查是否有更新日期
             if hasattr(paper, 'updated') and paper.published != paper.updated:
                 updated_str = paper.updated.strftime('%d %b %Y')
-                version_history = f"Submitted on {published_str}, last revised {updated_str}"
+                version_history = f"Published {published_str}, revised {updated_str}"
             else:
-                version_history = f"Submitted on {published_str}"
+                version_history = f"Published {published_str}"
         
         # 清理论文标题，生成合法的文件名
         clean_title = clean_filename(paper.title)
