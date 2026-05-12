@@ -4,3 +4,4 @@ openai
 requests
 Werkzeug
 python-dotenv
+httpx

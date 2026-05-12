@@ -20,9 +20,10 @@ from prompts import (
 )
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'arxiv-parser-secret-key'
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 app.config['UPLOAD_FOLDER'] = 'data/pdfs'
 app.config['DATABASE'] = 'data/arxiv_history.db'
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB 最大上传文件大小
 
 # 确保必要的目录存在
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -52,12 +53,14 @@ def init_db():
     # 兼容旧数据库，若字段不存在则添加
     try:
         c.execute('ALTER TABLE papers ADD COLUMN full_analysis TEXT')
-    except Exception:
-        pass
+    except sqlite3.OperationalError as e:
+        if 'duplicate column name' not in str(e).lower():
+            raise  # 重新抛出非预期错误
     try:
         c.execute("ALTER TABLE papers ADD COLUMN full_analysis_status TEXT DEFAULT 'none'")
-    except Exception:
-        pass
+    except sqlite3.OperationalError as e:
+        if 'duplicate column name' not in str(e).lower():
+            raise  # 重新抛出非预期错误
     conn.commit()
     conn.close()
 
@@ -124,19 +127,24 @@ def _verify_pdf_integrity(filepath):
 def download_paper(arxiv_id, force_redownload=False):
     """下载arXiv论文，遇到 429 限速时自动退避重试，支持完整性检查和重新下载"""
     import time as _time
+    import random
 
     max_retries = 4
     retry_delays = [10, 30, 60, 120]  # 每次重试的等待秒数
 
     for attempt in range(max_retries):
         try:
+            # 使用新的 Client API（替代已弃用的 Search.results）
+            client = arxiv.Client()
             search = arxiv.Search(id_list=[arxiv_id])
-            paper = next(search.results())
+            results = client.results(search)
+            paper = next(results)
             break  # 成功则跳出重试循环
         except arxiv.HTTPError as e:
             if e.status == 429 and attempt < max_retries - 1:
-                wait = retry_delays[attempt]
-                print(f"arxiv API 限速 (429)，{wait}s 后重试（第 {attempt + 1}/{max_retries - 1} 次）...")
+                # 添加随机抖动以避免多个客户端同时重试
+                wait = retry_delays[attempt] + random.uniform(0, 5)
+                print(f"arxiv API 限速 (429)，{wait:.1f}s 后重试（第 {attempt + 1}/{max_retries - 1} 次）...")
                 _time.sleep(wait)
                 continue
             print(f"下载论文失败: {e}")
@@ -240,26 +248,31 @@ def generate_summary(text, model="gpt-3.5-turbo"):
         base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
         
         if not api_key:
-            return "请配置 OPENAI_API_KEY 环境变量"
+            app.logger.error("OPENAI_API_KEY 未配置")
+            return "API 配置错误，请联系管理员"
+        
+        # 基本格式验证
+        if not api_key.startswith(('sk-', 'dashscope-')):
+            app.logger.warning(f"无效的 API Key 格式: {api_key[:8]}...")
+            return "API Key 格式无效"
         
         # 使用 prompts 模块生成 prompt
         prompt = get_summary_prompt(text)
         
-        # 导入 OpenAI 并创建客户端 - 移除代理参数
+        # 导入 OpenAI 并创建客户端 - 使用 httpx 禁用代理以避免线程安全问题
         import openai
+        import httpx
         
-        # 检查是否存在代理环境变量并临时移除
-        proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']
-        old_proxy_values = {}
-        
-        for var in proxy_vars:
-            if var in os.environ:
-                old_proxy_values[var] = os.environ[var]
-                del os.environ[var]
+        # 创建不使用代理的 HTTP 客户端
+        http_client = httpx.Client(proxies={})
         
         try:
-            # 创建客户端 - 使用更简洁的方式避免代理问题
-            client = openai.OpenAI(api_key=api_key, base_url=base_url if base_url != "https://api.openai.com/v1" else None)
+            # 创建客户端
+            client = openai.OpenAI(
+                api_key=api_key,
+                base_url=base_url if base_url != "https://api.openai.com/v1" else None,
+                http_client=http_client
+            )
             
             response = client.chat.completions.create(
                 model=model,
@@ -273,9 +286,8 @@ def generate_summary(text, model="gpt-3.5-turbo"):
             return response.choices[0].message.content
             
         finally:
-            # 恢复代理环境变量
-            for var, value in old_proxy_values.items():
-                os.environ[var] = value
+            # 关闭 HTTP 客户端
+            http_client.close()
             
     except Exception as e:
         print(f"生成总结失败: {e}")
@@ -623,9 +635,55 @@ def get_status(arxiv_id):
 
 @app.route('/api/history')
 def get_history():
-    """获取历史记录"""
-    papers = get_paper_history()
-    return jsonify(papers)
+    """获取历史记录，支持分页"""
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 20, type=int)
+    offset = (page - 1) * per_page
+    
+    conn = sqlite3.connect(app.config['DATABASE'])
+    c = conn.cursor()
+    
+    # 获取总数
+    c.execute('SELECT COUNT(*) FROM papers')
+    total = c.fetchone()[0]
+    
+    # 获取分页数据
+    c.execute('''
+        SELECT id, arxiv_id, title, version_history, created_at, status, summary,
+               full_analysis_status, pdf_path
+        FROM papers
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    ''', (per_page, offset))
+
+    papers = []
+    for row in c.fetchall():
+        pdf_path = row[8]
+        md_path = get_md_path_from_pdf(pdf_path)
+        md_exists = os.path.exists(md_path) if md_path else False
+
+        papers.append({
+            'id': row[0],
+            'arxiv_id': row[1],
+            'title': row[2],
+            'version_history': row[3],
+            'created_at': row[4],
+            'status': row[5],
+            'summary': row[6],
+            'full_analysis_status': row[7] or 'none',
+            'md_file_path': md_path if md_exists else None,
+            'md_exists': md_exists
+        })
+
+    conn.close()
+    
+    return jsonify({
+        'papers': papers,
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+        'total_pages': (total + per_page - 1) // per_page
+    })
 
 @app.route('/api/download/<arxiv_id>')
 def download_pdf(arxiv_id):
@@ -663,7 +721,7 @@ def download_pdf(arxiv_id):
         
         # 使用 quote 对文件名进行 URL 编码，支持中文
         from urllib.parse import quote
-        encoded_filename = quote(download_filename)
+        encoded_filename = quote(download_filename, safe='')  # 编码所有特殊字符
         
         return send_file(
             pdf_path,

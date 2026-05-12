@@ -25,8 +25,10 @@ async function loadHistorySide() {
     historyList.innerHTML = '<div class="text-center py-3 text-muted"><div class="spinner-border spinner-border-sm text-primary" role="status"><span class="visually-hidden">加载中...</span></div><p class="mt-2 mb-0">加载历史记录...</p></div>';
 
     try {
-        const response = await fetch('/api/history');
-        const papers = await response.json();
+        // 使用分页 API，获取第一页，每页 50 条（侧边栏显示更多）
+        const response = await fetch('/api/history?page=1&per_page=50');
+        const data = await response.json();
+        const papers = data.papers || [];
 
         if (papers.length === 0) {
             historyList.innerHTML = '<div class="text-center py-4 text-muted">暂无历史记录</div>';
@@ -606,8 +608,10 @@ async function loadHistory() {
     historyList.innerHTML = '';
     
     try {
-        const response = await fetch('/api/history');
-        const papers = await response.json();
+        // 使用分页 API，获取第一页，每页 20 条
+        const response = await fetch('/api/history?page=1&per_page=20');
+        const data = await response.json();
+        const papers = data.papers || [];
         
         loadingDiv.style.display = 'none';
         

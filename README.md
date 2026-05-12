@@ -1,6 +1,6 @@
 # arXiv 论文总结工具
 
-一个适合本地部署的网页工具，支持输入arXiv论文链接，自动下载论文pdf并调用大模型生成总结，同时提供历史记录功能。
+一个适合本地部署的网页工具，支持输入arXiv论文链接，自动下载论文PDF并调用大模型生成总结，同时提供历史记录功能。
 
 ## ✨ 功能特性
 
@@ -11,15 +11,17 @@
 - 🔄 **可选AI总结**：支持启用/禁用AI总结功能，灵活选择
 - 🔄 **重新分析**：支持重新进行AI总结和全文分析，方便更新或修正结果
 - 💾 **Markdown导出**：支持将全文分析结果导出为Markdown文件
-- 📚 **历史记录**：保存处理历史，方便查看和管理
+- 📚 **历史记录**：保存处理历史，支持分页加载，方便查看和管理
 - ⏰ **版本记录**：显示论文提交和修订时间
 - 📱 **响应式设计**：支持桌面和移动设备
 - 🎨 **现代化界面**：简洁美观的用户界面，支持LaTeX公式渲染
 - ⚡ **异步处理**：AI总结和全文分析异步生成，不阻塞用户界面
+- 🔒 **安全增强**：支持环境变量配置SECRET_KEY，API Key格式验证，线程安全的代理处理
 
 体验网址：http://arxiv-parser.iepose.cn/
 <img src="assets/demo.png" width="80%" alt="网页效果图">
 
+> ⚠️ **注意**：演示站点（http://arxiv-parser.iepose.cn/）当前因 API 密钥过期，AI 总结与分析功能暂时不可用。建议克隆本项目到本地，配置自己的 API Key 后部署使用，以获得完整体验。
 
 ## 🛠️ 技术栈
 
@@ -27,6 +29,7 @@
 - **前端**：HTML5 + CSS3 + JavaScript
 - **数据库**：SQLite（本地存储）
 - **论文下载**：arXiv Python库
+- **HTTP客户端**：httpx（线程安全的代理处理）
 
 ## 📦 安装部署
 
@@ -55,11 +58,11 @@
    conda activate arxiv_parser
    ```
 
-3. **配置 API 和模型**
+3. **配置环境变量**
    ```bash
    cp .env.example .env
-   # 编辑 .env 文件，填入你的 OPENAI_API_KEY 并选择模型
-   # 例如: DEFAULT_MODEL=gpt-3.5-turbo 或 deepseek-chat
+   # 编辑 .env 文件，填入你的 API Key 并配置安全密钥
+   # 例如: OPENAI_API_KEY=sk-... 和 SECRET_KEY=<random-key>
    ```
 
 4. **启动应用**
@@ -75,6 +78,7 @@
 
    ```bash
    OPENAI_API_KEY=你的_API_Key
+   SECRET_KEY=随机生成的密钥（生产环境必填）
    # 如使用 DeepSeek：
    # OPENAI_BASE_URL=https://api.deepseek.com/v1
    # DEFAULT_MODEL=deepseek-chat
@@ -90,6 +94,7 @@
      --name arxiv_parser \
      -p 5000:5000 \
      -e OPENAI_API_KEY=${OPENAI_API_KEY} \
+     -e SECRET_KEY=${SECRET_KEY} \
      -e OPENAI_BASE_URL=${OPENAI_BASE_URL} \
      -e DEFAULT_MODEL=${DEFAULT_MODEL} \
      -e FLASK_PORT=5000 \
@@ -123,6 +128,7 @@
    - 复制 `.env.example` 为 `.env`
    - 编辑 `.env` 文件，填入 API 密钥并设置模型
    - 例如：`OPENAI_API_KEY=sk-...` 和 `DEFAULT_MODEL=gpt-3.5-turbo`
+   - 生产环境务必设置 `SECRET_KEY` 为强随机值
 
 2. **输入论文链接**：在输入框中粘贴arXiv论文链接
    - 支持格式：`https://arxiv.org/abs/xxxx.xxxxx`
@@ -152,7 +158,7 @@
    - 点击"重新分析"可重置并重新进行全文分析
 
 8. **历史记录**：查看右侧"历史记录"面板
-   - 自动加载并显示所有处理过的论文
+   - 自动加载并显示所有处理过的论文（支持分页）
    - 点击任意历史记录加载论文详情
    - 加载时自动填充对应的arXiv URL
    - 状态图标显示是否已完成AI总结和全文分析
@@ -170,6 +176,7 @@
 | 变量名 | 说明 | 默认值 | 示例 |
 |--------|------|--------|------|
 | `OPENAI_API_KEY` | OpenAI API密钥 | 必填 | `sk-...` |
+| `SECRET_KEY` | Flask会话加密密钥 | 自动生成 | `<random-hex>` |
 | `DEFAULT_MODEL` | 使用的AI模型 | `deepseek-chat` | `gpt-3.5-turbo`, `gpt-4`, `deepseek-chat` |
 | `OPENAI_BASE_URL` | API基础URL | `https://api.openai.com/v1` | `https://api.deepseek.com/v1` |
 | `FLASK_PORT` | 应用端口 | `5000` | `5001` |
@@ -181,14 +188,17 @@
 ```bash
 # 使用 OpenAI GPT-3.5
 OPENAI_API_KEY=your-openai-key
+SECRET_KEY=$(python -c "import os; print(os.urandom(24).hex())")
 DEFAULT_MODEL=gpt-3.5-turbo
 
 # 使用 OpenAI GPT-4
 OPENAI_API_KEY=your-openai-key
+SECRET_KEY=$(python -c "import os; print(os.urandom(24).hex())")
 DEFAULT_MODEL=gpt-4
 
 # 使用 DeepSeek
 OPENAI_API_KEY=your-deepseek-key
+SECRET_KEY=$(python -c "import os; print(os.urandom(24).hex())")
 OPENAI_BASE_URL=https://api.deepseek.com/v1
 DEFAULT_MODEL=deepseek-chat
 ```
@@ -202,7 +212,7 @@ DEFAULT_MODEL=deepseek-chat
 ## 📁 项目结构
 
 ```
-arrowx_parser/
+arxiv_parser/
 ├── app.py                  # Flask应用主文件
 ├── prompts.py              # AI提示词统一管理
 ├── requirements.txt        # Python依赖
@@ -210,7 +220,6 @@ arrowx_parser/
 ├── docker-compose.yml      # Docker Compose配置
 ├── Dockerfile              # Docker镜像配置
 ├── README.md               # 项目说明
-├── INSTALL.md              # 快速安装指南
 ├── .env.example            # 环境变量示例
 ├── .gitignore              # Git忽略文件
 ├── templates/
@@ -235,6 +244,7 @@ arrowx_parser/
 - 示例：`2017_Attention Is All You Need.pdf`
 - 自动清理标题中的非法字符（如 `:`, `/`, `\`, `|`, `?`, `*`, `<`, `>`）
 - 避免文件名冲突和文件系统限制
+- PDF完整性验证，自动检测并重新下载损坏文件
 
 ### AI总结生成
 - 基于论文摘要生成结构化中文总结
@@ -242,6 +252,7 @@ arrowx_parser/
 - 异步处理，不阻塞用户界面，可实时查看状态
 - 支持多种大语言模型（OpenAI GPT-3.5/GPT-4、DeepSeek等）
 - 字数控制在300-500字之间，专业简洁
+- 线程安全的API调用，支持并发请求
 
 ### 全文深度分析
 - 基于论文完整PDF内容进行深度分析
@@ -272,7 +283,7 @@ arrowx_parser/
 ### 历史记录管理
 - 使用SQLite本地数据库存储，无需额外配置
 - 保存论文元数据、总结结果和处理状态
-- 右侧边栏实时显示历史记录列表
+- 右侧边栏实时显示历史记录列表（支持分页加载）
 - 每个记录显示：标题、版本记录（截断）、完成时间（北京时间）、状态图标
 - 点击任意记录自动加载论文详情
 - 加载时自动填充对应的arXiv URL到输入框
@@ -293,12 +304,20 @@ arrowx_parser/
 - 加载动画和过渡效果，提升用户体验
 - 简洁直观的操作流程，降低使用门槛
 
+### 安全特性
+- SECRET_KEY 从环境变量读取，生产环境必须配置
+- API Key 格式验证，防止无效请求
+- 文件上传大小限制（50MB）
+- 线程安全的HTTP客户端，避免竞态条件
+- 文件名URL编码，支持中文和特殊字符
+
 ## 💡 使用建议
 
 1. **API成本**：注意API调用费用，全文分析使用长文本模型可能消耗较多token
 2. **网络连接**：确保可以访问arXiv和LLM API
 3. **存储空间**：PDF文件和分析结果会占用本地存储空间
 4. **隐私保护**：论文数据和API密钥本地存储，不会上传到服务器
+5. **生产部署**：务必设置强随机值的 `SECRET_KEY`，不要使用默认值
 
 
 ## 🚀 高级功能
