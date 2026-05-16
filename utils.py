@@ -2,7 +2,16 @@ import os
 import re
 
 
-def extract_arxiv_id(url):
+def extract_arxiv_id(url_or_id):
+    # Accept bare IDs like "2301.00001" or "hep-th/9901001"
+    bare_new = re.fullmatch(r'\d{4}\.\d{4,5}(v\d+)?', url_or_id.strip())
+    if bare_new:
+        return bare_new.group(0).split('v')[0]
+
+    bare_old = re.fullmatch(r'[a-z\-]+/\d{7}', url_or_id.strip())
+    if bare_old:
+        return bare_old.group(0)
+
     patterns = [
         r'arxiv\.org/abs/(\d+\.\d+)',
         r'arxiv\.org/pdf/(\d+\.\d+)',
@@ -10,7 +19,7 @@ def extract_arxiv_id(url):
         r'arxiv\.org/pdf/([a-z\-]+/\d+)',
     ]
     for pattern in patterns:
-        m = re.search(pattern, url)
+        m = re.search(pattern, url_or_id)
         if m:
             return m.group(1)
     return None

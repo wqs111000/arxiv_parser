@@ -1,12 +1,22 @@
+import logging
 import sqlite3
 from contextlib import contextmanager
 
+logger = logging.getLogger(__name__)
+
 DATABASE = 'data/arxiv_history.db'
+
+_ALLOWED_UPDATE_COLUMNS = frozenset({
+    'title', 'authors', 'abstract', 'url', 'pdf_path', 'version_history',
+    'summary', 'summary_model', 'status', 'full_analysis', 'full_analysis_status',
+})
 
 
 @contextmanager
 def get_db():
     conn = sqlite3.connect(DATABASE)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA synchronous=NORMAL')
     try:
         yield conn
         conn.commit()
@@ -37,6 +47,8 @@ def init_db():
                 full_analysis_status TEXT DEFAULT 'none'
             )
         ''')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_arxiv_id ON papers (arxiv_id)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_created_at ON papers (created_at)')
         for col in ('full_analysis TEXT', "full_analysis_status TEXT DEFAULT 'none'"):
             try:
                 conn.execute(f'ALTER TABLE papers ADD COLUMN {col}')
@@ -95,6 +107,9 @@ def get_history(page=1, per_page=50):
 def update_paper(arxiv_id, **fields):
     if not fields:
         return
+    invalid = set(fields) - _ALLOWED_UPDATE_COLUMNS
+    if invalid:
+        raise ValueError(f'update_paper: 不允许更新的列: {invalid}')
     set_clause = ', '.join(f'{k}=?' for k in fields)
     with get_db() as conn:
         conn.execute(

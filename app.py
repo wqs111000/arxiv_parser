@@ -1,3 +1,5 @@
+import logging
+import logging.config
 import os
 import threading
 from urllib.parse import quote
@@ -10,6 +12,29 @@ load_dotenv()
 import db
 import utils
 from services import download_paper, generate_summary, run_full_analysis, cleanup_corrupted_files, UPLOAD_FOLDER
+
+logging.config.dictConfig({
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'default': {
+            'format': '%(asctime)s %(levelname)s %(name)s: %(message)s',
+            'datefmt': '%Y-%m-%d %H:%M:%S',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'default',
+        },
+    },
+    'root': {
+        'level': os.environ.get('LOG_LEVEL', 'INFO'),
+        'handlers': ['console'],
+    },
+})
+
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
@@ -170,7 +195,7 @@ def delete_paper(arxiv_id):
             try:
                 os.remove(path)
             except Exception as e:
-                print(f'删除文件失败: {path} - {e}')
+                logger.warning('删除文件失败: %s - %s', path, e)
     return jsonify({'message': '删除成功', 'arxiv_id': arxiv_id})
 
 
@@ -261,7 +286,7 @@ def reset_analysis(arxiv_id):
             try:
                 os.remove(md_path)
             except Exception as e:
-                print(f'删除 md 文件失败: {e}')
+                logger.warning('删除 md 文件失败: %s', e)
 
     return jsonify({'message': '分析状态已重置', 'arxiv_id': arxiv_id, 'reset_type': reset_type})
 
@@ -342,6 +367,11 @@ def check_pdf(arxiv_id):
 
     is_valid, error_msg = utils.verify_pdf(pdf_path)
     return jsonify({'exists': True, 'valid': is_valid, 'error': error_msg, 'pdf_path': pdf_path})
+
+
+@app.route('/api/health')
+def health():
+    return jsonify({'status': 'ok'})
 
 
 if __name__ == '__main__':
