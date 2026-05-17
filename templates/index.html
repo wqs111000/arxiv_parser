@@ -12,26 +12,44 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
-    <div class="container-fluid">
+    <div class="app-shell">
         <!-- 头部 -->
-        <header class="bg-primary text-white py-4 mb-4">
+        <header class="app-header">
             <div class="container">
-                <div class="row align-items-center">
-                    <div class="col-md-12">
-                        <h1 class="mb-0"><i class="fas fa-graduation-cap me-2"></i>arXiv 论文总结工具</h1>
-                        <p class="mb-0 mt-2">输入arXiv论文链接，自动下载并生成AI总结</p>
+                <div class="row align-items-center g-3">
+                    <div class="col-lg-8">
+                        <div class="eyebrow mb-2">Research Workflow</div>
+                        <h1 class="mb-2"><i class="fas fa-graduation-cap me-2"></i>arXiv 论文总结工具</h1>
+                        <p class="mb-0">输入 arXiv 链接，自动下载 PDF，生成摘要总结与全文分析。</p>
+                    </div>
+                    <div class="col-lg-4">
+                        <div class="header-metrics">
+                            <div>
+                                <span>PDF</span>
+                                <strong>自动归档</strong>
+                            </div>
+                            <div>
+                                <span>AI</span>
+                                <strong>异步分析</strong>
+                            </div>
+                            <div>
+                                <span>DB</span>
+                                <strong>历史追踪</strong>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
         </header>
 
-        <div class="container">
+        <main class="container app-main">
             <!-- 主要内容区 -->
-            <div class="row">
+            <div class="row g-4">
                 <!-- 输入区域 -->
                 <div class="col-lg-4">
-                    <div class="card shadow-sm">
-                        <div class="card-header bg-light">
+                    <div class="sidebar-stack">
+                    <div class="card app-card">
+                        <div class="card-header">
                             <h5 class="mb-0"><i class="fas fa-link me-2"></i>输入论文链接</h5>
                         </div>
                         <div class="card-body">
@@ -43,8 +61,8 @@
                                     <div class="form-text">支持 arXiv 论文链接</div>
                                 </div>
                                 
-                                <div class="mb-3">
-                                    <div class="form-check">
+                                <div class="option-card mb-3">
+                                    <div class="form-check mb-1">
                                         <input class="form-check-input" type="checkbox" id="enableAISummary" checked>
                                         <label class="form-check-label" for="enableAISummary">
                                             <i class="fas fa-robot me-1"></i>启用摘要总结
@@ -55,12 +73,12 @@
                                     </div>
                                 </div>
                                 
-                                <div class="mb-3">
-                                    <div class="form-check">
+                                <div class="option-card mb-3">
+                                    <div class="form-check mb-1">
                                         <input class="form-check-input" type="checkbox" id="enableFullAnalysis">
                                         <label class="form-check-label" for="enableFullAnalysis">
                                             <i class="fas fa-file-alt me-1"></i>启用全文分析
-                                            <span class="badge bg-warning text-dark ms-1" style="font-size:0.7em;">高 token</span>
+                                            <span class="badge bg-warning text-dark ms-1">高 token</span>
                                         </label>
                                     </div>
                                     <div class="form-text text-muted small">
@@ -77,8 +95,8 @@
                     </div>
 
                     <!-- 快速示例 -->
-                    <div class="card shadow-sm mt-3">
-                        <div class="card-header bg-light">
+                    <div class="card app-card">
+                        <div class="card-header">
                             <h6 class="mb-0"><i class="fas fa-lightbulb me-2"></i>快速示例</h6>
                         </div>
                         <div class="card-body">
@@ -100,8 +118,8 @@
                     </div>
 
                     <!-- 历史记录 -->
-                    <div class="card shadow-sm mt-3" id="historySection">
-                        <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                    <div class="card app-card" id="historySection">
+                        <div class="card-header d-flex justify-content-between align-items-center">
                             <h6 class="mb-0"><i class="fas fa-history me-2"></i>历史记录</h6>
                             <button class="btn btn-sm btn-outline-primary" onclick="loadHistorySide()">
                                 <i class="fas fa-sync-alt me-1"></i>刷新
@@ -120,13 +138,14 @@
                             </div>
                         </div>
                     </div>
+                    </div>
                 </div>
 
                 <!-- 结果展示区域 -->
                 <div class="col-lg-8">
                     <div id="resultContainer" style="display: none;">
-                        <div class="card shadow-sm">
-                            <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                        <div class="card app-card result-card">
+                            <div class="card-header d-flex justify-content-between align-items-center gap-3">
                                 <h5 class="mb-0" id="paperTitle">论文标题</h5>
                                 <div id="paperActions" class="btn-group" role="group">
                                     <button class="btn btn-sm btn-outline-success" id="uploadPdfBtn" onclick="showUploadPdfModal()" title="上传论文 PDF 到服务器">
@@ -142,18 +161,18 @@
                             </div>
                             <div class="card-body">
                                 <!-- 论文信息 -->
-                                <div class="mb-4">
+                                <div class="content-section">
                                     <h6 class="text-muted">作者</h6>
                                     <p id="paperAuthors" class="mb-0"></p>
                                 </div>
                                 
-                                <div class="mb-4">
+                                <div class="content-section">
                                     <h6 class="text-muted">摘要</h6>
                                     <div id="paperAbstract" class="paper-text"></div>
                                 </div>
 
                                 <!-- 版本记录 -->
-                                <div class="mb-4" id="versionHistory" style="display: none;">
+                                <div class="content-section" id="versionHistory" style="display: none;">
                                     <h6 class="text-muted">
                                         <i class="fas fa-clock me-1"></i>版本记录
                                     </h6>
@@ -161,7 +180,7 @@
                                 </div>
 
                                 <!-- 使用的模型 -->
-                                <div class="mb-4" id="modelInfo" style="display: none;">
+                                <div class="content-section" id="modelInfo" style="display: none;">
                                     <h6 class="text-muted">
                                         <i class="fas fa-cog me-1"></i>AI 模型
                                         <span class="badge bg-secondary ms-2" id="modelName"></span>
@@ -169,7 +188,7 @@
                                 </div>
 
                                 <!-- AI 总结 -->
-                                <div class="mb-4">
+                                <div class="content-section">
                                     <div class="d-flex justify-content-between align-items-center">
                                         <h6 class="text-muted mb-0">
                                             <i class="fas fa-robot me-1"></i>AI 总结
@@ -193,7 +212,7 @@
                                 </div>
 
                                 <!-- 全文分析 -->
-                                <div class="mb-4" id="fullAnalysisSection" style="display: none;">
+                                <div class="content-section" id="fullAnalysisSection" style="display: none;">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
                                         <h6 class="text-muted mb-0">
                                             <i class="fas fa-file-alt me-1"></i>全文分析
@@ -222,14 +241,14 @@
                     </div>
 
                     <!-- 空状态 -->
-                    <div id="emptyState" class="text-center py-5">
-                        <i class="fas fa-file-alt text-muted" style="font-size: 4rem;"></i>
-                        <h4 class="text-muted mt-3">暂无处理结果</h4>
+                    <div id="emptyState" class="empty-state">
+                        <i class="fas fa-file-alt"></i>
+                        <h4 class="mt-3">暂无处理结果</h4>
                         <p class="text-muted">输入arXiv论文链接开始处理</p>
                     </div>
                 </div>
             </div>
-        </div>
+        </main>
 
         <!-- 历史记录模态框 -->
         <div class="modal fade" id="historyModal" tabindex="-1">
