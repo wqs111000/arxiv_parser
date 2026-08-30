@@ -3,6 +3,7 @@ let currentArxivId = null;
 let statusCheckTimeout = null;
 let pollElapsed = 0;
 let allHistoryPapers = [];
+const apiUrl = path => `${window.APP_BASE_PATH || ''}/api${path}`;
 
 // Init
 document.addEventListener('DOMContentLoaded', function () {
@@ -25,7 +26,7 @@ async function loadHistorySide() {
     historyList.innerHTML = '<div class="text-center py-3 text-muted"><div class="spinner-border spinner-border-sm text-primary" role="status"></div><p class="mt-2 mb-0">加载历史记录...</p></div>';
 
     try {
-        const response = await fetch('/api/history?page=1&per_page=100');
+        const response = await fetch(apiUrl('/history?page=1&per_page=100'));
         const data = await response.json();
         allHistoryPapers = data.papers || [];
         renderHistorySide(allHistoryPapers);
@@ -96,7 +97,7 @@ async function deletePaper(arxivId, event) {
     if (!confirm('确定要删除该论文及其所有分析结果吗？')) return;
 
     try {
-        const response = await fetch(`/api/paper/${arxivId}`, { method: 'DELETE' });
+        const response = await fetch(apiUrl(`/paper/${arxivId}`), { method: 'DELETE' });
         const data = await response.json();
         if (response.ok) {
             showToast(data.message, 'success');
@@ -133,7 +134,7 @@ async function handleFormSubmit(e) {
     submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>处理中...';
 
     try {
-        const response = await fetch('/api/process', {
+        const response = await fetch(apiUrl('/process'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url, enable_ai: enableAI, enable_full_analysis: enableFullAnalysis }),
@@ -199,7 +200,7 @@ function _schedulePoll() {
 async function checkPaperStatus() {
     if (!currentArxivId) return;
     try {
-        const response = await fetch(`/api/status/${currentArxivId}`);
+        const response = await fetch(apiUrl(`/status/${currentArxivId}`));
         const data = await response.json();
         if (response.ok) {
             updateResultDisplay(data);
@@ -400,14 +401,14 @@ function renderMarkdown(text) {
 async function downloadPDF() {
     if (!currentArxivId) { showToast('请先处理论文', 'warning'); return; }
     try {
-        const r = await fetch(`/api/check_pdf/${currentArxivId}`);
+        const r = await fetch(apiUrl(`/check_pdf/${currentArxivId}`));
         const d = await r.json();
         if (!d.exists || !d.valid) {
             showToast(d.error || 'PDF 文件不存在或已损坏', 'error');
             updatePdfButtonState(false);
             return;
         }
-        window.open(`/api/download/${currentArxivId}`, '_blank');
+        window.open(apiUrl(`/download/${currentArxivId}`), '_blank');
     } catch (e) {
         showToast('检查 PDF 状态失败', 'error');
     }
@@ -416,7 +417,7 @@ async function downloadPDF() {
 async function checkAndUpdatePdfStatus() {
     if (!currentArxivId) return;
     try {
-        const r = await fetch(`/api/check_pdf/${currentArxivId}`);
+        const r = await fetch(apiUrl(`/check_pdf/${currentArxivId}`));
         const d = await r.json();
         updatePdfButtonState(d.exists && d.valid);
     } catch (e) {
@@ -447,7 +448,7 @@ async function redownloadPDF() {
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
     try {
-        const r = await fetch(`/api/redownload/${currentArxivId}`, { method: 'POST' });
+        const r = await fetch(apiUrl(`/redownload/${currentArxivId}`), { method: 'POST' });
         const d = await r.json();
         showToast(r.ok ? d.message : (d.error || '重新下载失败'), r.ok ? 'success' : 'error');
         updatePdfButtonState(r.ok);
@@ -477,7 +478,7 @@ async function uploadPDF() {
     const formData = new FormData();
     formData.append('pdf_file', file);
     try {
-        const r = await fetch(`/api/upload_pdf/${currentArxivId}`, { method: 'POST', body: formData });
+        const r = await fetch(apiUrl(`/upload_pdf/${currentArxivId}`), { method: 'POST', body: formData });
         const d = await r.json();
         bootstrap.Modal.getInstance(document.getElementById('uploadPdfModal')).hide();
         showToast(r.ok ? d.message : (d.error || '上传失败'), r.ok ? 'success' : 'error');
@@ -504,7 +505,7 @@ async function loadHistory() {
     loadingDiv.style.display = 'block';
     historyList.innerHTML = '';
     try {
-        const r = await fetch('/api/history?page=1&per_page=20');
+        const r = await fetch(apiUrl('/history?page=1&per_page=20'));
         const data = await r.json();
         const papers = data.papers || [];
         loadingDiv.style.display = 'none';
@@ -546,7 +547,7 @@ function loadPaperFromHistory(arxivId) {
 
 async function loadPaperData(arxivId) {
     try {
-        const r = await fetch(`/api/paper/${arxivId}`);
+        const r = await fetch(apiUrl(`/paper/${arxivId}`));
         const data = await r.json();
         if (r.ok) {
             updateResultDisplay(data);
@@ -582,7 +583,7 @@ async function continueAISummary() {
     summaryDiv.style.display = 'block';
 
     try {
-        const r = await fetch(`/api/continue_ai/${currentArxivId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const r = await fetch(apiUrl(`/continue_ai/${currentArxivId}`), { method: 'POST', headers: { 'Content-Type': 'application/json' } });
         const d = await r.json();
         if (r.ok) {
             showToast(d.message, 'success');
@@ -605,7 +606,7 @@ async function startFullAnalysis() {
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>处理中...';
     try {
-        const r = await fetch(`/api/full_analysis/${currentArxivId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const r = await fetch(apiUrl(`/full_analysis/${currentArxivId}`), { method: 'POST', headers: { 'Content-Type': 'application/json' } });
         const d = await r.json();
         if (r.ok) {
             showToast(d.message, 'success');
@@ -625,7 +626,7 @@ async function startFullAnalysis() {
 
 function downloadAnalysis() {
     if (!currentArxivId) { showToast('请先选择论文', 'warning'); return; }
-    window.open(`/api/download_analysis/${currentArxivId}`, '_blank');
+    window.open(apiUrl(`/download_analysis/${currentArxivId}`), '_blank');
 }
 
 async function resetAnalysis(type) {
@@ -634,7 +635,7 @@ async function resetAnalysis(type) {
     if (!confirm(`确定要重新进行${typeText}吗？之前的分析结果将被清除。`)) return;
 
     try {
-        const r = await fetch(`/api/reset_analysis/${currentArxivId}`, {
+        const r = await fetch(apiUrl(`/reset_analysis/${currentArxivId}`), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ type }),
@@ -670,6 +671,61 @@ function showToast(message, type = 'info') {
     const [iconClass, colorClass] = iconMap[type] || ['fa-info-circle', 'text-primary'];
     icon.className = `fas me-2 ${colorClass} ${iconClass}`;
     new bootstrap.Toast(toastEl).show();
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge base search
+// ---------------------------------------------------------------------------
+
+async function searchKnowledgeBase() {
+    const query = document.getElementById('kbSearchInput').value.trim();
+    if (!query) { showToast('请输入搜索关键词', 'warning'); return; }
+
+    const container = document.getElementById('kbResultContainer');
+    const answerDiv = document.getElementById('kbAnswer');
+    const chunksDiv = document.getElementById('kbChunks');
+
+    container.style.display = 'block';
+    document.getElementById('emptyState').style.display = 'none';
+    document.getElementById('resultContainer').style.display = 'none';
+    answerDiv.style.display = 'none';
+    chunksDiv.innerHTML = '<div class="text-center py-4"><div class="spinner-border spinner-border-sm text-primary"></div><span class="ms-2">搜索中...</span></div>';
+
+    try {
+        const r = await fetch(apiUrl(`/search?q=${encodeURIComponent(query)}&n=5`));
+        const d = await r.json();
+        if (!r.ok) { showToast(d.error || '搜索失败', 'error'); return; }
+
+        if (d.answer) {
+            answerDiv.innerHTML = `<strong>综合回答：</strong><br>${escapeHtml(d.answer).replace(/\n/g, '<br>')}`;
+            answerDiv.style.display = 'block';
+        }
+
+        if (d.chunks && d.chunks.length > 0) {
+            chunksDiv.innerHTML = '<h6 class="text-muted mt-3 mb-2">相关片段</h6>' + d.chunks.map((c, i) => `
+                <div class="card mb-2">
+                    <div class="card-body p-2">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <small class="text-muted">${escapeHtml(c.metadata?.title || '未知')} · ${escapeHtml(c.metadata?.section || '')}</small>
+                            ${c.score != null ? `<small class="text-muted">相关度: ${(c.score * 100).toFixed(0)}%</small>` : ''}
+                        </div>
+                        <p class="mb-0 mt-1 small" style="max-height: 150px; overflow-y: auto;">${escapeHtml((c.text || '').substring(0, 500))}</p>
+                        ${c.metadata?.arxiv_id ? `<button class="btn btn-link btn-sm p-0 mt-1" onclick="loadPaperFromHistory('${c.metadata.arxiv_id}')">查看论文详情 →</button>` : ''}
+                    </div>
+                </div>
+            `).join('');
+        } else {
+            chunksDiv.innerHTML = '<div class="text-center py-4 text-muted">未找到相关内容。请先对论文进行全文分析后再搜索。</div>';
+        }
+    } catch (e) {
+        chunksDiv.innerHTML = '<div class="text-center py-4 text-danger">搜索失败，请重试</div>';
+    }
+}
+
+function closeKBResult() {
+    document.getElementById('kbResultContainer').style.display = 'none';
+    document.getElementById('emptyState').style.display = 'block';
+    document.getElementById('kbSearchInput').value = '';
 }
 
 function escapeHtml(text) {

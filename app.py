@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import db
+import knowledge_search
+import knowledge_store
 import utils
 from services import download_paper, generate_summary, run_full_analysis, cleanup_corrupted_files, UPLOAD_FOLDER
 
@@ -38,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
+BASE_PATH = os.environ.get('APP_BASE_PATH', '').rstrip('/')
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 db.init_db()
@@ -104,7 +107,7 @@ def _start_full_analysis_thread(arxiv_id, paper_data, model):
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', base_path=BASE_PATH)
 
 
 @app.route('/api/process', methods=['POST'])
@@ -196,6 +199,7 @@ def delete_paper(arxiv_id):
                 os.remove(path)
             except Exception as e:
                 logger.warning('删除文件失败: %s - %s', path, e)
+    knowledge_store.remove_paper_index(arxiv_id)
     return jsonify({'message': '删除成功', 'arxiv_id': arxiv_id})
 
 
@@ -374,6 +378,67 @@ def health():
     return jsonify({'status': 'ok'})
 
 
+# ---------------------------------------------------------------------------
+# Knowledge base routes
+# ---------------------------------------------------------------------------
+
+@app.route('/api/search')
+def search_knowledge():
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify({'error': '请输入搜索关键词'}), 400
+
+    n = max(1, min(request.args.get('n', 5, type=int) or 5, 20))
+    chunks = knowledge_search.search(query, n_results=n)
+
+    if not chunks:
+        chunks = knowledge_search.keyword_search(query, n_results=n)
+
+    synthesize = request.args.get('synthesize', '1') != '0'
+    if synthesize:
+        answer = knowledge_search.synthesize_answer(query, chunks)
+    else:
+        answer = None
+
+    return jsonify({
+        'query': query,
+        'chunks': chunks,
+        'answer': answer,
+        'total_chunks': len(chunks),
+    })
+
+
+@app.route('/api/index/stats')
+def index_stats():
+    return jsonify(knowledge_store.get_index_stats())
+
+
+@app.route('/api/index', methods=['POST'])
+def reindex_all():
+    def worker():
+        n = knowledge_store.index_all_papers()
+        logger.info('全量索引完成，共 %d 篇论文', n)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify({'message': '开始全量索引，请稍后查看状态'})
+
+
+@app.route('/api/index/<arxiv_id>', methods=['POST'])
+def index_single_paper(arxiv_id):
+    paper = db.get_paper(arxiv_id)
+    if not paper:
+        return jsonify({'error': '论文不存在'}), 404
+
+    content = paper.get('full_analysis')
+    if not content:
+        return jsonify({'error': '论文尚未进行全文分析，无可索引内容'}), 400
+
+    title = paper.get('title', '')
+    n = knowledge_store.index_paper(arxiv_id, title, content)
+    return jsonify({'message': f'索引完成，共 {n} 个片段', 'arxiv_id': arxiv_id, 'chunks': n})
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('FLASK_PORT', 5000))
-    app.run(debug=True, host='0.0.0.0', port=port)
+    debug = os.environ.get('FLASK_DEBUG', '').lower() in ('1', 'true', 'yes')
+    app.run(debug=debug, host='0.0.0.0', port=port)

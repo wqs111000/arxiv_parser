@@ -256,6 +256,11 @@ def run_full_analysis(arxiv_id, paper_data, model):
             save_analysis_to_md(paper_data['pdf_path'], analysis)
             db.update_paper(arxiv_id, full_analysis=analysis, full_analysis_status='completed')
             logger.info('全文分析完成: %s', arxiv_id)
+            try:
+                import knowledge_store
+                knowledge_store.index_paper(arxiv_id, paper_data.get('title', ''), analysis)
+            except Exception as e:
+                logger.warning('自动索引论文失败 %s: %s', arxiv_id, e)
         else:
             db.update_paper(arxiv_id, full_analysis=analysis, full_analysis_status='failed')
             logger.warning('全文分析失败: %s - %s', arxiv_id, analysis)

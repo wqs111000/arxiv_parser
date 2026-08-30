@@ -67,3 +67,6 @@ temp/
 # Application specific
 data/pdfs/*.pdf
 static/files/
+data/pdfs/*.md
+.workbuddy
+data/chromadb

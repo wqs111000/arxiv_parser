@@ -8,7 +8,7 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <!-- KaTeX for math formula rendering -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
-    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+    <link href="{{ base_path }}{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -114,6 +114,24 @@
                                     An Image is Worth 16x16 Words
                                 </a>
                             </div>
+                        </div>
+                    </div>
+
+                    <!-- 知识库搜索 -->
+                    <div class="card app-card">
+                        <div class="card-header">
+                            <h6 class="mb-0"><i class="fas fa-brain me-2"></i>知识库搜索</h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="input-group mb-2">
+                                <input type="text" class="form-control form-control-sm" id="kbSearchInput"
+                                       placeholder="跨论文提问，如：对比各论文的方法差异"
+                                       onkeypress="if(event.key==='Enter') searchKnowledgeBase()">
+                                <button class="btn btn-sm btn-primary" onclick="searchKnowledgeBase()">
+                                    <i class="fas fa-search"></i>
+                                </button>
+                            </div>
+                            <small class="text-muted">对已全文分析的论文进行语义检索和综合回答</small>
                         </div>
                     </div>
 
@@ -240,6 +258,22 @@
                         </div>
                     </div>
 
+                    <!-- 知识库搜索结果 -->
+                    <div id="kbResultContainer" style="display: none;">
+                        <div class="card app-card result-card">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <h5 class="mb-0"><i class="fas fa-brain me-2"></i>知识库搜索</h5>
+                                <button class="btn btn-sm btn-outline-secondary" onclick="closeKBResult()">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <div id="kbAnswer" class="alert alert-primary" style="display: none;"></div>
+                                <div id="kbChunks"></div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- 空状态 -->
                     <div id="emptyState" class="empty-state">
                         <i class="fas fa-file-alt"></i>
@@ -318,6 +352,7 @@
     <!-- KaTeX scripts loaded at the end for better performance -->
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script>window.APP_BASE_PATH = {{ base_path|tojson }};</script>
+    <script src="{{ base_path }}{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

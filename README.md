@@ -1,5 +1,12 @@
 # arXiv 论文总结工具
 
+[English Version](./README_EN.md) | [中文版本](#chinese)
+
+---
+
+<a id="chinese"></a>
+# 中文版本
+
 一个适合本地部署的网页工具，支持输入arXiv论文链接，自动下载论文PDF并调用大模型生成总结，同时提供历史记录功能。
 
 ## ✨ 功能特性
@@ -349,3 +356,10 @@ MIT License
 本项目仅供学习和研究使用，请遵守arXiv和AI服务提供商的使用条款。
 主要基于 WorkBuddy，使用 kimi-k2-thinking 模型，采用 vibe coding 开发。
 项目参考：https://github.com/dw-dengwei/daily-arXiv-ai-enhanced
+
+---
+
+<a id="chinese"></a>
+# 中文版本
+
+一个适合本地部署的网页工具，支持输入arXiv论文链接，自动下载论文PDF并调用大模型生成总结，同时提供历史记录功能。
